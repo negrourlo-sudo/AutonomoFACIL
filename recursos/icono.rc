@@ -1,0 +1,2 @@
+/* Icono del ejecutable. windres se ejecuta desde la raíz del proyecto. */
+IDI_ICON1 ICON "instalador/icono.ico"

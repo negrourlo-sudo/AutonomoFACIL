@@ -1,0 +1,14 @@
+[package]
+name = "instalador"
+version = "0.1.0"
+edition = "2021"
+description = "Instalador por usuario de Facturacion"
+
+# Crate independiente: no depende del proyecto de la aplicación.
+[workspace]
+
+[profile.release]
+opt-level = "z"
+lto = true
+panic = "abort"
+strip = true

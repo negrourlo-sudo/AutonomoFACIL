@@ -1,0 +1,8 @@
+/target
+/.toolchain
+/instalador/target
+/dist
+/datos.json
+/datos.json.bak
+/datos.json.tmp
+/export

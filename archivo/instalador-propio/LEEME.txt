@@ -1,0 +1,19 @@
+Instalador propio en Rust — RETIRADO (histórico)
+
+Este era el primer instalador de la aplicación: un ejecutable escrito en Rust
+que llevaba la app incrustada y ofrecía --silent y --uninstall.
+
+Se retiró al quedarse un único instalador: el de NSIS
+(instalador/facturacion.nsi, generado con `bash empaquetar-nsis.sh`), que es
+más pequeño (2,3 MB frente a 5,2 MB), tiene asistente en español, licencia e
+imágenes, y sigue sin pedir administrador.
+
+Se conserva aquí sólo como referencia. No forma parte del build ni se mantiene.
+
+Para empaquetar la aplicación hoy:
+
+    bash empaquetar-nsis.sh    ->  dist/facturacion.exe
+                                   dist/Facturacion-NSIS.exe
+
+Los archivos de NSIS siguen en instalador/: facturacion.nsi, imagenes.py,
+aviso.txt, icono.ico, asistente.bmp y cabecera.bmp.

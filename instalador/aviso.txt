@@ -1,0 +1,36 @@
+AUTONOMOFACIL - PRESUPUESTOS Y FACTURAS
+
+Programa de escritorio para emitir presupuestos y facturas en Espana, con
+registro de facturacion encadenado (Verifactu) y exportacion FacturaE 3.2.2.
+
+
+QUE HACE ESTE PROGRAMA
+
+ - Genera la huella SHA-256 encadenada de cada factura y su codigo QR.
+ - Exporta FacturaE 3.2.2 y un PDF A4 con el QR incorporado.
+ - Guarda todos los datos en tu equipo, sin enviarlos a ningun servidor.
+
+
+QUE NO HACE
+
+ - NO remite registros a la Agencia Tributaria. No incluye certificado
+   electronico ni firma XAdES.
+ - NO sustituye a un sistema informatico de facturacion certificado: el
+   productor del software debe presentar la declaracion responsable ante la
+   AEAT antes de que su uso sea conforme al RD 1007/2023.
+ - NO valida el XML contra el esquema oficial. Conviene comprobarlo antes de
+   presentar facturas ante FACe o cualquier plataforma publica.
+
+
+DONDE ESTAN TUS DATOS
+
+   %APPDATA%\AutonomoFACIL\datos.json
+
+Desinstalar el programa NO borra ese fichero. Si quieres eliminarlo, hazlo a
+mano: es tu copia de seguridad y tu responsabilidad conservarla.
+
+
+INSTALACION
+
+Se instala solo para tu usuario, en %LOCALAPPDATA%\Programs\AutonomoFACIL.
+No necesita permisos de administrador y no modifica archivos del sistema.

@@ -1,0 +1,35 @@
+[package]
+name = "autonomofacil"
+version = "0.3.1"
+edition = "2021"
+description = "Presupuestos y facturas para España: Verifactu y FacturaE 3.2.2"
+
+[dependencies]
+# GUI de escritorio, renderer OpenGL (glow). Sin WebView, sin Node.
+eframe = { version = "0.29", default-features = false, features = ["glow", "default_fonts"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = { version = "0.4", features = ["serde"] }
+sha2 = "0.10"
+# Sólo para la matriz del QR: se dibuja a mano, sin dependencias de imagen.
+qrcode = { version = "0.13", default-features = false }
+
+# El binario que se reparte: LTO y un solo codegen para que el código de UI
+# (mucho genérico de egui) entre bien optimizado. `strip` recorta el tamaño.
+# No se usa `panic = "abort"` a propósito: si algo falla, queremos el mensaje.
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = true
+
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 2
+
+# eframe local: create_context prueba 3.2, 3.0, 2.1 y GLES en vez de pedir
+# 3.2 core a ciegas (los drivers Intel antiguos no pasan de OpenGL 3.1).
+[patch.crates-io]
+eframe = { path = "vendor/eframe" }
