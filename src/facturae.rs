@@ -253,6 +253,22 @@ pub fn generar(doc: &Documento, empresa: &Empresa) -> String {
         ));
         x.push_str("        </Tax>\n");
     }
+    if doc.recargo_pb > 0 {
+        // FacturaE no tiene un código propio de recargo de equivalencia: se
+        // declara como «Otros» (05) para que los totales cuadren.
+        x.push_str("        <Tax>\n");
+        x.push_str("          <TaxTypeCode>05</TaxTypeCode>\n");
+        x.push_str(&format!("          <TaxRate>{}</TaxRate>\n", pct2(doc.recargo_pb)));
+        x.push_str(&format!(
+            "          <TaxableBase><TotalAmount>{}</TotalAmount></TaxableBase>\n",
+            imp(t.base_total)
+        ));
+        x.push_str(&format!(
+            "          <TaxAmount><TotalAmount>{}</TotalAmount></TaxAmount>\n",
+            imp(t.cuota_recargo)
+        ));
+        x.push_str("        </Tax>\n");
+    }
     x.push_str("      </TaxesOutputs>\n");
 
     if doc.irpf_pb > 0 {
@@ -281,7 +297,7 @@ pub fn generar(doc: &Documento, empresa: &Empresa) -> String {
     ));
     x.push_str(&format!(
         "        <TotalTaxOutputs>{}</TotalTaxOutputs>\n",
-        imp(t.cuota_iva)
+        imp(t.cuota_iva + t.cuota_recargo)
     ));
     x.push_str(&format!(
         "        <TotalTaxesWithheld>{}</TotalTaxesWithheld>\n",

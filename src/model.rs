@@ -52,6 +52,68 @@ pub fn fmt_cents_eur(c: i64) -> String {
     format!("{} EUR", fmt_cents(c))
 }
 
+/// Comprueba el NIF español: DNI (8 dígitos + letra), NIE (X/Y/Z + 7 dígitos
+/// + letra) y CIF (letra + 7 dígitos + control). Se aceptan K, L y M, que
+/// siguen la regla del DNI. Devuelve `false` si la letra de control no cuadra,
+/// que es el error que de verdad rechaza la AEAT.
+pub fn nif_valido(nif: &str) -> bool {
+    let n = nif.trim().to_uppercase().replace([' ', '-', '.'], "");
+    let b = n.as_bytes();
+    if b.len() != 9 {
+        return false;
+    }
+    const LETRAS: &[u8] = b"TRWAGMYFPDXBNJZSQVHLCKE";
+    const LETRAS_CIF: &[u8] = b"JABCDEFGHI";
+    let digito = |c: u8| c.is_ascii_digit();
+
+    let suma_cif = |b: &[u8]| -> u32 {
+        let mut suma = 0u32;
+        for (i, c) in b[1..8].iter().enumerate() {
+            let d = (c - b'0') as u32;
+            if i % 2 == 0 {
+                let doble = d * 2;
+                suma += doble / 10 + doble % 10;
+            } else {
+                suma += d;
+            }
+        }
+        (10 - (suma % 10)) % 10
+    };
+
+    match b[0] {
+        b'0'..=b'9' => {
+            b[..8].iter().all(|c| digito(*c))
+                && b[8].is_ascii_alphabetic()
+                && LETRAS[(n[..8].parse::<u32>().unwrap_or(0) % 23) as usize] == b[8]
+        }
+        b'X' | b'Y' | b'Z' | b'K' | b'L' | b'M' => {
+            let pref = match b[0] {
+                b'X' => 0,
+                b'Y' => 1,
+                b'Z' => 2,
+                _ => 0,
+            };
+            if !b[1..8].iter().all(|c| digito(*c)) || !b[8].is_ascii_alphabetic() {
+                return false;
+            }
+            let mut numero = pref.to_string();
+            numero.push_str(&n[1..8]);
+            LETRAS[(numero.parse::<u32>().unwrap_or(0) % 23) as usize] == b[8]
+        }
+        _ => {
+            if !b[0].is_ascii_alphabetic() || !b[1..8].iter().all(|c| digito(*c)) {
+                return false;
+            }
+            let control = suma_cif(b);
+            if b[8].is_ascii_digit() {
+                control == (b[8] - b'0') as u32
+            } else {
+                b[8].is_ascii_alphabetic() && LETRAS_CIF[control as usize] == b[8]
+            }
+        }
+    }
+}
+
 /// `1500` -> `"1,5"` (cantidad en milésimas, sin ceros de relleno).
 pub fn fmt_qty(m: i64) -> String {
     let negativo = m < 0;
@@ -189,6 +251,69 @@ impl Estado {
     }
 }
 
+/// Tipo de cliente a efectos de IVA e IRPF. Al elegirlo en una factura se
+/// proponen el IVA, la retención y el recargo que le corresponden.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum RegimenCliente {
+    #[default]
+    General,
+    Profesional,
+    Minorista,
+    Intracomunitario,
+    InversionSujetoPasivo,
+}
+
+impl RegimenCliente {
+    pub const TODOS: [RegimenCliente; 5] = [
+        RegimenCliente::General,
+        RegimenCliente::Profesional,
+        RegimenCliente::Minorista,
+        RegimenCliente::Intracomunitario,
+        RegimenCliente::InversionSujetoPasivo,
+    ];
+
+    pub fn etiqueta(self) -> &'static str {
+        match self {
+            RegimenCliente::General => "Empresa o particular · régimen general",
+            RegimenCliente::Profesional => "Autónomo profesional · con retención",
+            RegimenCliente::Minorista => "Comercio minorista · recargo de equivalencia",
+            RegimenCliente::Intracomunitario => "Empresa de la UE · intracomunitaria (0 %)",
+            RegimenCliente::InversionSujetoPasivo => "Inversión del sujeto pasivo (ISP)",
+        }
+    }
+
+    /// IVA que se propone al elegir este régimen.
+    pub fn iva_pb(self) -> i32 {
+        match self {
+            RegimenCliente::Intracomunitario | RegimenCliente::InversionSujetoPasivo => 0,
+            _ => 2100,
+        }
+    }
+
+    /// Retención de IRPF que aplica el cliente (sólo profesionales).
+    pub fn irpf_pb(self) -> i32 {
+        match self {
+            RegimenCliente::Profesional => 1500,
+            _ => 0,
+        }
+    }
+
+    /// Recargo de equivalencia que hay que repercutir al minorista.
+    pub fn recargo_pb(self) -> i32 {
+        match self {
+            RegimenCliente::Minorista => 520,
+            _ => 0,
+        }
+    }
+
+    pub fn operacion(self) -> TipoOperacion {
+        match self {
+            RegimenCliente::Intracomunitario => TipoOperacion::Intracomunitaria,
+            _ => TipoOperacion::Nacional,
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct Cliente {
     pub id: u64,
@@ -206,6 +331,9 @@ pub struct Cliente {
     pub email: String,
     pub telefono: String,
     pub notas: String,
+    /// Régimen a efectos de IVA/IRPF: decide retención, recargo y operación.
+    #[serde(default)]
+    pub regimen: RegimenCliente,
 }
 
 impl Cliente {
@@ -227,6 +355,36 @@ impl Cliente {
     }
 }
 
+/// Cómo tributa el IRPF de la actividad. Cambia el pago fraccionado: 130 en
+/// estimación directa y 131 en estimación objetiva (módulos).
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum RegimenIrpf {
+    #[default]
+    DirectaNormal,
+    DirectaSimplificada,
+    Objetiva,
+}
+
+impl RegimenIrpf {
+    pub const TODOS: [RegimenIrpf; 3] = [
+        RegimenIrpf::DirectaNormal,
+        RegimenIrpf::DirectaSimplificada,
+        RegimenIrpf::Objetiva,
+    ];
+
+    pub fn etiqueta(self) -> &'static str {
+        match self {
+            RegimenIrpf::DirectaNormal => "Estimación directa (normal)",
+            RegimenIrpf::DirectaSimplificada => "Estimación directa simplificada",
+            RegimenIrpf::Objetiva => "Estimación objetiva (módulos)",
+        }
+    }
+
+    pub fn es_objetiva(self) -> bool {
+        matches!(self, RegimenIrpf::Objetiva)
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Empresa {
     pub nombre: String,
@@ -241,6 +399,9 @@ pub struct Empresa {
     pub email: String,
     pub telefono: String,
     pub iban: String,
+    /// Ruta al logo JPEG que se imprime en facturas, presupuestos y proformas.
+    #[serde(default)]
+    pub logo: String,
     pub serie: String,
     pub iva_defecto: i32,
     pub irpf_defecto: i32,
@@ -256,6 +417,15 @@ pub struct Empresa {
     /// A qué se dedica el negocio.
     #[serde(default)]
     pub actividad: Actividad,
+    /// Cómo tributa el IRPF: decide si toca el 130 o el 131.
+    #[serde(default)]
+    pub regimen_irpf: RegimenIrpf,
+    /// Comerciante minorista en recargo de equivalencia: sin 303 ni 390.
+    #[serde(default)]
+    pub recargo_equivalencia: bool,
+    /// Obligado al Suministro Inmediato de Información: 303 mensual y sin 390.
+    #[serde(default)]
+    pub sii: bool,
 }
 
 fn dias_vencimiento_defecto() -> i32 {
@@ -383,6 +553,7 @@ impl Default for Empresa {
             email: String::new(),
             telefono: String::new(),
             iban: String::new(),
+            logo: String::new(),
             serie: y,
             iva_defecto: 2100,
             irpf_defecto: 0,
@@ -390,6 +561,9 @@ impl Default for Empresa {
             verifactu_activo: true,
             dias_vencimiento: 30,
             forma_pago_defecto: "Transferencia".to_string(),
+            regimen_irpf: RegimenIrpf::DirectaNormal,
+            recargo_equivalencia: false,
+            sii: false,
             actividad: Actividad::Servicios,
         }
     }
@@ -495,6 +669,8 @@ pub struct Totales {
     pub bases: Vec<(i32, i64, i64)>,
     pub base_total: i64,
     pub cuota_iva: i64,
+    /// Recargo de equivalencia repercutido (minoristas).
+    pub cuota_recargo: i64,
     pub retencion: i64,
     pub total: i64,
 }
@@ -561,6 +737,9 @@ pub struct Documento {
     /// Localización a efectos de IVA. Los datos antiguos son nacionales.
     #[serde(default)]
     pub operacion: TipoOperacion,
+    /// Recargo de equivalencia en puntos base (520 = 5,2 %). 0 en el resto.
+    #[serde(default)]
+    pub recargo_pb: i32,
 }
 
 impl Documento {
@@ -585,6 +764,7 @@ impl Documento {
             pdf: String::new(),
             pagos: Vec::new(),
             operacion: TipoOperacion::Nacional,
+            recargo_pb: 0,
         }
     }
 
@@ -615,6 +795,27 @@ impl Documento {
                 iva_pb: empresa.iva_defecto,
                 ..Default::default()
             });
+        }
+    }
+
+    /// Ajusta IVA, retención, recargo y tipo de operación al régimen del
+    /// cliente. Se llama al elegirlo en el editor y al crear el borrador.
+    pub fn aplicar_cliente(&mut self) {
+        if !self.tipo.es_fiscal() {
+            return;
+        }
+        self.irpf_pb = self.cliente.regimen.irpf_pb();
+        self.recargo_pb = self.cliente.regimen.recargo_pb();
+        self.operacion = self.cliente.regimen.operacion();
+        let iva = self.cliente.regimen.iva_pb();
+        if iva == 0 {
+            for l in &mut self.lineas {
+                l.iva_pb = 0;
+            }
+        } else if self.lineas.iter().all(|l| l.iva_pb == 0) {
+            for l in &mut self.lineas {
+                l.iva_pb = iva;
+            }
         }
     }
 
@@ -689,12 +890,18 @@ impl Documento {
             bases.push((tipo, base, cuota));
         }
         let retencion = div_round(base_total * self.irpf_pb as i64, 10_000);
+        let cuota_recargo = if self.operacion.lleva_iva() {
+            div_round(base_total * self.recargo_pb as i64, 10_000)
+        } else {
+            0
+        };
         Totales {
             bases,
             base_total,
             cuota_iva,
+            cuota_recargo,
             retencion,
-            total: base_total + cuota_iva - retencion,
+            total: base_total + cuota_iva + cuota_recargo - retencion,
         }
     }
 
@@ -709,5 +916,91 @@ impl Documento {
         } else {
             "F1"
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn doc_con(regimen: RegimenCliente, iva_pb: i32, base: i64) -> Documento {
+        let mut c = Cliente::default();
+        c.regimen = regimen;
+        let mut d = Documento::nuevo(TipoDoc::Factura, c, 0, "A".to_string());
+        d.numero = 1;
+        d.estado = Estado::Emitido;
+        d.lineas.push(Linea {
+            cantidad_milli: 1000,
+            precio_cents: base,
+            iva_pb,
+            ..Default::default()
+        });
+        d.aplicar_cliente();
+        d
+    }
+
+    #[test]
+    fn el_regimen_del_cliente_fija_iva_retencion_y_recargo() {
+        let pro = doc_con(RegimenCliente::Profesional, 2100, 1000_00);
+        assert_eq!(pro.irpf_pb, 1500);
+        assert_eq!(pro.totales().retencion, 150_00);
+        assert_eq!(pro.totales().total, 1060_00);
+
+        let min = doc_con(RegimenCliente::Minorista, 2100, 1000_00);
+        assert_eq!(min.recargo_pb, 520);
+        assert_eq!(min.totales().cuota_recargo, 52_00);
+        assert_eq!(min.totales().total, 1262_00);
+
+        let ue = doc_con(RegimenCliente::Intracomunitario, 2100, 1000_00);
+        assert_eq!(ue.operacion, TipoOperacion::Intracomunitaria);
+        assert_eq!(ue.totales().cuota_iva, 0);
+        assert_eq!(ue.totales().cuota_recargo, 0);
+        assert_eq!(ue.totales().total, 1000_00);
+
+        let general = doc_con(RegimenCliente::General, 2100, 1000_00);
+        assert_eq!(general.irpf_pb, 0);
+        assert_eq!(general.recargo_pb, 0);
+        assert_eq!(general.totales().total, 1210_00);
+    }
+
+    #[test]
+    fn el_gasto_calcula_cuota_retencion_y_total() {
+        let g = Gasto {
+            base_cents: 10_000,
+            iva_pb: 2100,
+            irpf_pb: 1500,
+            ..Default::default()
+        };
+        assert_eq!(g.cuota_iva(), 2_100);
+        assert_eq!(g.retencion(), 1_500);
+        assert_eq!(g.total(), 10_600);
+
+        // Redondeo al céntimo, no truncado.
+        let r = Gasto {
+            base_cents: 1_234,
+            iva_pb: 2100,
+            irpf_pb: 0,
+            ..Default::default()
+        };
+        assert_eq!(r.cuota_iva(), 259);
+        assert_eq!(r.total(), 1_493);
+    }
+
+    #[test]
+    fn el_nif_se_valida_con_su_letra_de_control() {
+        // DNI
+        assert!(nif_valido("12345678Z"));
+        assert!(nif_valido("12345678-Z"));
+        assert!(nif_valido(" 12345678z "));
+        assert!(!nif_valido("12345678A"));
+        // NIE
+        assert!(nif_valido("X1234567L"));
+        assert!(!nif_valido("X1234567A"));
+        // CIF
+        assert!(nif_valido("B12345674"));
+        assert!(!nif_valido("B12345678"));
+        // Basura
+        assert!(!nif_valido(""));
+        assert!(!nif_valido("1234567Z"));
     }
 }

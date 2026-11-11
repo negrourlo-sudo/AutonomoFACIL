@@ -395,3 +395,368 @@ para restar lo retenido en la Renta.
 - El **368 (OSS)** sólo hace falta si vendes tú directamente a particulares de la
 UE por encima de 10.000 € al año; con Steam no.
 - Clientes empresa de la UE: factura «Empresa de la UE» y al 349.
+
+## Modelos rellenados (0.4.0)
+
+En la guía, cada modelo que la app sabe calcular (**303, 130, 390, 347 y
+349**) tiene su botón **«Rellenar modelo»**. Los trimestrales (303, 130, 349)
+llevan además selector de periodo; los anuales (390, 347) se calculan del año
+entero. Genera dos ficheros en `%APPDATA%\AutonomoFACIL\export\` y abre el
+PDF y su carpeta:
+
+- `Modelo-303-2026-1T.pdf`: las casillas del modelo con los importes ya
+  calculados (devengado por tipo, deducible, resultado). Es un **borrador**
+  para revisar, no un documento oficial de la AEAT.
+- `Modelo-303-2026-1T.json`: las mismas casillas en formato máquina
+  (`{"numero":"69","valor":12345,"unidad":"cents"}`), para pegarlas en otro
+  programa o pasárselas a un robot.
+- Los anuales se llaman `Modelo-390-2026-anual.pdf` y
+  `Modelo-347-2026-anual.pdf`.
+
+Casillas contrastadas con las instrucciones de la AEAT (ejercicio 2026):
+
+- **303**: 01/02/03 (4 %), 04/05/06 (10 %), 07/08/09 (21 %), 150/151/152
+  (0 %), 27 total cuota devengada, 28/29 y 45 deducible, 46 resultado del
+  régimen general, 64 suma de resultados y **69 resultado** (71 es la
+  liquidación tras compensar y devolver).
+- **130**: 01 ingresos acumulados, 02 gastos, 03 rendimiento neto, 04 el
+  20 %, 05 pagos anteriores, 06 retenciones del trimestre, 07 resultado y
+  **19 resultado final** (con las casillas 13 a 18 en blanco, 12 y 19
+  coinciden con 07).
+- **390**: numeración propia, no la del 303: 01 a 06 (base y cuota al 4,
+  10 y 21 %), 33/34 totales, 48/49 y 64 deducible, 65 resultado del régimen
+  general, 84 suma de resultados y 86 resultado de la liquidación.
+- **347**: un renglón por cliente y otro por proveedor que supere 3.005,06 €
+  con IVA, con el total del año.
+- **349**: un renglón por NIF-IVA de cliente con la base intracomunitaria del
+  trimestre y el total.
+
+### Entenderlo de un vistazo
+
+El botón dice **«Preparar el modelo»** y debajo aparece una frase en
+castellano llano: «Sale a ingresar 1.234,56 EUR: 2.000,00 EUR de IVA
+repercutido menos 765,44 EUR deducible.» Esa misma frase va destacada en la
+cabecera del PDF, encima de las casillas, para que el documento se entienda
+solo. El aviso al terminar dice qué se ha generado y para qué sirve cada
+fichero.
+
+### Vista «Modelos e impuestos»
+
+En el menú lateral, dentro de DATOS, hay una vista propia para los modelos:
+
+- Selector de **ejercicio** (◀ 2026 ▶) y trimestre activo.
+- **Tus datos fiscales** tal y como saldrán en el PDF: nombre, NIF,
+dirección completa, provincia, email, IBAN y actividad, con botón para
+editarlos.
+- **Lo que falta**, en lenguaje llano: nombre, NIF sin los 9 caracteres,
+dirección incompleta, IBAN, email, años sin facturas o sin gastos, actividad
+en «Otra»… Cuando está todo, lo dice en verde; si no, cada punto con su
+motivo y un botón a Ajustes.
+- La **lista de modelos del año** con su plazo (y aviso en rojo si venció sin
+presentar), casillas para marcar lo presentado, selector de trimestre en los
+trimestrales, botón **«Preparar el modelo»**, la frase de resumen («Sale a
+liquidar…») y atajos para abrir la Sede de la AEAT o ver el paso a paso.
+
+## El asistente de puesta en marcha
+
+La primera vez que se abre el programa (o mientras no se haya completado) sale
+un asistente de cuatro pasos:
+
+1. **Tú** — nombre, NIF (se comprueba la letra de control) y si eres autónomo
+   persona física o sociedad.
+2. **Tu actividad** — a qué te dedicas, régimen del IRPF (directa
+   simplificada, normal o módulos) y una previsión de facturación. Marca
+   también si tienes empleados, pagas alquiler de local o estás en el SII.
+3. **Tus clientes** — particulares, empresas, profesionales que retienen,
+   comercios minoristas, empresas de la UE o clientes con inversión del sujeto
+   pasivo. Y si tú eres minorista en recargo de equivalencia.
+4. **Tu plan** — resumen en una frase de cómo tributas, IVA y retención que
+   aplicas, lista de modelos con plazos y consejos para no equivocarte.
+
+El asistente es una **ventana emergente** centrada, con el resto de la app
+oscurecida detrás: no se puede tocar nada de fuera hasta terminar o cerrar. Los
+campos se rellenan dentro del propio diálogo, con la barra de pasos arriba y los
+botones Anterior / Siguiente / Guardar y empezar abajo, junto a la voz. Si el
+contenido no cabe (el plan final es largo), el paso tiene su propio
+desplazamiento.
+
+Al pulsar **Guardar y empezar** se rellenan los datos de la empresa, el IVA y
+el IRPF por defecto, el régimen y las casillas de recargo/SII, y el programa
+abre el inicio. `Más tarde` vuelve al inicio sin guardar y el asistente vuelve
+a salir en el siguiente arranque.
+
+Se puede repetir cuando haga falta desde **Asistente** en la barra lateral, y
+mientras no esté hecho el inicio muestra una tarjeta para abrirlo. El motor
+(`src/asistente.rs`) reutiliza las mismas obligaciones que la vista de modelos,
+así que el asistente y el resto del programa nunca dicen cosas distintas.
+
+### Editor de facturas: comprobación y atajos
+
+- **Validación en vivo**: bajo los totales aparece «Falta poco (n)» con la lista
+  de lo que queda (serie, líneas, fechas, descripciones). Si todo está bien, se
+  pone en verde: «Todo listo: puedes guardar el borrador o emitir».
+- **Borrador guardable a medias**: basta con que fechas y números estén bien
+  escritos; puedes guardarlo sin serie o sin líneas y terminarlo después. Si un
+  número está mal, el botón se desactiva para no guardar ceros sin querer.
+- **Atajos**: `Ctrl+S` guarda el borrador, `Ctrl+Enter` emite cuando no falta
+  nada.
+- **Autocompletado de artículos**: al escribir una descripción que empieza como
+  un artículo guardado (3 letras o más), se rellenan solos el precio, el IVA y la
+  cantidad.
+- **IVA automático por operación**: al pasar a intracomunitaria, exportación o
+  exenta las líneas van al 0 %; al volver a nacional recuperan tu IVA por
+  defecto.
+- **Duplicar**: en el panel de detalle, «Duplicar» crea un borrador nuevo con el
+  mismo cliente y líneas, fecha de hoy y vencimiento según tus días por defecto.
+  Es la vía rápida para una factura repetitiva.
+- **Aviso de cambios sin guardar**: al pulsar Cancelar o al cambiar de pantalla
+  con un documento abierto, un diálogo ofrece **Guardar borrador y salir**,
+  **Descartar cambios** o **Seguir editando**. Solo aparece si de verdad has
+  tocado algo: se compara una huella de lo que hay en pantalla (incluidos los
+  textos a medio escribir) con la del momento de abrirlo.
+
+### Gastos y clientes: NIF y totales en vivo
+
+- Al escribir el **NIF de un proveedor** o de un **cliente**, si la letra de
+  control no cuadra sale un aviso ámbar en el momento, sin esperar a guardar:
+  una factura con NIF erróneo no sirve como justificante y no entra en el 347.
+  Un NIF vacío se sigue permitiendo (factura simplificada al cliente; gasto sin
+  NIF en proveedores de fuera).
+- En la ficha de gasto, debajo de los campos, un recuadro calcula **cuota de
+  IVA, retención de IRPF y total** mientras se teclea, con el redondeo al
+  céntimo del modelo. Recuerda que la cuota se deduce en el 303 y la base resta
+  en el 130.
+
+### Gráficas de contabilidad
+
+La pestaña **Contabilidad → Resumen** abre con la evolución del año:
+
+- **Ingresos y gastos por mes**: barras azules y ámbar con la base imponible
+  de cada mes; al pasar el ratón por encima dice ingresos, gastos y resultado
+  de ese mes.
+- **Resultado acumulado**: área con línea mes a mes, para ver de un vistazo si
+  el año va a favor o en contra, con el último valor destacado.
+- **IVA por trimestre**: repercutido frente a soportado, con el resultado del
+  303 en el tooltip.
+- **Clientes que más facturan** y **gastos por categoría**: barras
+  horizontales con importe y porcentaje del total.
+
+La pestaña **IVA (303)** repite la gráfica trimestral para comparar con las
+casillas. Todo se cuenta por fecha de factura o gasto (devengo), igual que los
+modelos, y se filtra por el año elegido arriba.
+
+Las gráficas se dibujan con el pintor de egui (`src/graficas.rs`), sin
+bibliotecas nuevas: las series se calculan en funciones puras con tests y el
+dibujo sólo pinta. Los ejes se redondean a 1, 2 o 5 por potencia de diez para
+que las guías se lean de un vistazo.
+
+### La voz del tutorial
+
+El asistente se lee en voz alta con una **voz femenina** del sistema: en un
+Windows en español usa Microsoft Helena (es-ES); si no está, cualquier voz
+femenina instalada. Cada paso se narra al entrar en él, con frases pensadas
+para el oído (sin listas ni abreviaturas).
+
+Abajo hay una casilla **Voz** para silenciarla, un botón **Escuchar este paso**
+para repetir, y un aviso «Leyendo en voz alta…» mientras habla. La preferencia
+se guarda y también se puede cambiar en **Ajustes → Voz en el tutorial**.
+
+Se implementa con SAPI a través de PowerShell, sin dependencias: cada frase es
+un proceso oculto que se puede cortar al instante, y el texto viaja en base64
+para que acentos y comillas no rompan el comando. Si no hay voz disponible, el
+asistente funciona igual, en silencio.
+
+### Tipo de cliente: IVA, retención y recargo automáticos
+
+Cada cliente tiene un **régimen fiscal** que decide lo que se aplica en sus
+facturas:
+
+| Régimen | IVA | Retención | Operación |
+|---|---|---|---|
+| Empresa o particular | 21 % | 0 % | Nacional |
+| Autónomo profesional | 21 % | **15 %** | Nacional |
+| Comercio minorista | 21 % + **5,2 % de recargo** | 0 % | Nacional |
+| Empresa de la UE | 0 % + leyenda | 0 % | Intracomunitaria (349) |
+| Inversión del sujeto pasivo | 0 % + leyenda | 0 % | Nacional |
+
+Al elegir el cliente en una factura, la app ajusta el IVA de las líneas, el
+IRPF y el recargo, y cambia el tipo de operación. El recargo de equivalencia
+se suma al total, sale en su propia línea en el PDF y en el XML de FacturaE
+(como impuesto «Otros», código 05, porque FacturaE no tiene un código
+propio).
+
+### Logo en los documentos
+
+En **Ajustes → Logo de la empresa** se elige una imagen con el diálogo de
+Windows. Cualquier formato vale (PNG, JPG, BMP, GIF): se convierte a JPEG sobre
+fondo blanco, con 900 px de lado como máximo, y se guarda en
+`%APPDATA%\AutonomoFACIL\logo.jpg`.
+
+El logo sale arriba a la izquierda en la cabecera de facturas, presupuestos y
+proformas, en todas las páginas, y el bloque de datos de la empresa se aparta a
+su derecha. En el PDF se copia el JPEG tal cual (`/DCTDecode`), sin recodificar:
+no hace falta ninguna biblioteca de imagen. Si la ruta no existe o el fichero no
+es un JPEG válido, el documento se genera sin logo en vez de fallar.
+
+Si aún no tienes logo, la misma tarjeta de Ajustes tiene un desplegable
+**«¿No tienes logo? Créalo con IA o gratis en dos minutos»** con un prompt
+listo para copiar (sólo hay que cambiar `[nombre de mi empresa]` y
+`[sector o servicio]`) y botones que abren **Nano Banana · Gemini**, **ChatGPT**,
+**Microsoft Designer**, **Canva**, **Looka**, **Shopify Logo Maker**,
+**Ideogram** y **remove.bg**. El prompt pide estilo minimalista, dos colores,
+cuadrado, fondo blanco y que se reconozca a 32 px; los consejos recuerdan
+exportar a 800–1000 px y sin texto diminuto. Los enlaces están en
+`src/recursos.rs`, con un test que exige que todos sean `https://`.
+
+El XML de FacturaE no lleva logotipo (el estándar no lo tiene): sólo el PDF.
+
+### Ayudas al pasar el ratón
+
+Las etiquetas y los campos de Ajustes, de la ficha de cliente y del editor de
+factura llevan un texto de ayuda: qué es el NIF y por qué se valida, cuándo se
+aplica el 15 % de retención, qué significa cada operación, qué es el recargo
+de equivalencia, para qué sirve el IBAN, qué formato admite la cantidad… Se
+muestra dejando el ratón quieto encima.
+
+### Regímenes: directa, módulos, recargo de equivalencia y SII
+
+En Ajustes hay dos controles nuevos que cambian la lista de modelos y sus
+avisos:
+
+- **Régimen del IRPF**: estimación directa (normal o simplificada) o
+  **estimación objetiva (módulos)**. En módulos el pago a cuenta pasa a ser el
+  **131** y desaparece el 130, con su propia guía de presentación.
+- **Recargo de equivalencia** (comercio minorista): desaparecen el **303** y
+  el **390**, porque el IVA y el recargo los ingresa el proveedor; aparece el
+  **309** para las operaciones no periódicas (adquisiciones
+  intracomunitarias, inversión del sujeto pasivo, venta de inmuebles).
+- **SII**: el 303 pasa a mensual, los libros van en tiempo real y el **390**
+  deja de listarse.
+
+La lista de obligaciones se calcula con `fiscal::obligaciones_con(actividad,
+empresa)`; `fiscal::obligaciones(actividad)` sigue existiendo para los tests y
+usa el régimen por defecto.
+
+### Comercio electrónico
+
+Para actividades de comercio o venta digital, la guía muestra la tarjeta
+**«Comercio electrónico sin sustos»** con los ocho puntos que más problemas
+dan, contrastados con la AEAT:
+
+- Ventas a distancia a particulares de la UE: umbral único de **10.000 €** de
+  IVA excluido; por encima, IVA del país del cliente y modelo **368 (OSS)**.
+- Importaciones de hasta **150 €** desde fuera de la UE: **IOSS**, modelo 369.
+- **Marketplaces** (Amazon, Steam, Etsy): la plataforma actúa como vendedor
+  presunto y liquida el IVA; tú le facturas a ella.
+- **Factura simplificada** hasta 400 € (general) y hasta 3.000 € en ventas al
+  por menor; no vale para entregas intracomunitarias ni ventas a distancia
+  desde otro Estado miembro.
+- Devoluciones con **factura rectificativa**, nunca borrando la original.
+- Comisiones de **pasarelas de pago** (Stripe, PayPal, Redsys) como gasto
+  deducible; se declara el bruto del cliente.
+- Recordatorio de **recargo de equivalencia** y de **criterio de caja/SII**.
+
+### Validaciones y justificantes
+
+Antes de presentar, la vista avisa de los fallos que de verdad duelen:
+
+- **NIF**: se comprueba la letra de control de DNI, NIE y CIF (con K, L y M
+  incluidas). Si no cuadra, sale en «Lo que falta» y no se deja pasar como si
+  nada.
+- **303**: cada cuota contra su base y su tipo (si editas 07 sin tocar 09, te
+  dice qué importe serían); resultado negativo («sale a compensar»);
+  operaciones exentas, de exportación o intracomunitarias que no van en las
+  casillas 01-09 y su importe.
+- **390**: el total devengado contra la suma de los cuatro 303.
+- **130**: la casilla 05 contra lo que salió en los trimestres anteriores; y
+  retenciones en facturas con la casilla 06 a cero.
+- **347**: gastos sin NIF que se quedan fuera del modelo.
+- **349**: facturas intracomunitarias con un NIF-IVA sin prefijo de país.
+
+Son avisos, no bloqueos: salen en ámbar bajo el resumen y el autónomo decide.
+
+Al marcar un periodo como presentado aparece el campo **«Justificante»**
+para guardar el nº de registro o el CSV que da la Sede (se guarda en
+`datos.json` con el mismo criterio que la marca de presentado).
+
+### Casillas a mano, con totales que se recalculan
+
+En cada modelo de la vista (303, 130 y 390) hay un desplegable **«Editar
+casillas a mano»**: una rejilla con casilla, concepto y un campo de texto
+con el valor calculado como pista. Se escribe sólo lo que se quiera cambiar
+(AIB, prorrata, compensaciones de trimestres anteriores, la casilla 13 del
+130…) y el resto se respeta.
+
+- Al cambiar una base o una cuota, **los totales se recalculan solos**: en el
+  303 el 27 sale de 03+06+09+152, el 45 del 29, y 46, 64 y 69 del resultado;
+  en el 390 el 33, 34, 64, 65, 84 y 86; en el 130 el 03, 04, 07 y 19.
+- Lo escrito se guarda en `datos.json` (`ajustes_modelos`) por modelo y
+  periodo (`303-2026-1T`, `390-2026-anual`), así que sigue ahí al volver y
+  es lo que va al PDF y al JSON al pulsar «Preparar el modelo».
+- El botón «Quitar los ajustes de este modelo» vuelve a los valores
+  calculados.
+- El resumen en una frase se actualiza al instante con los valores editados.
+
+### Guía de entrega en la app
+
+Cada modelo rellenable tiene una sección desplegable **«Cómo presentarlo en
+la Sede»** con: con qué te puedes identificar (certificado, DNIe, Cl@ve,
+MiDNI/eIDAS), el paso a paso hasta el justificante, qué documentos admite
+cada uno (el 303 y el 130 sólo formulario web; el 390 el 347 y el 349 también
+fichero con diseño de registro) y el aviso propio del modelo. Botones:
+**Abrir la Sede de la AEAT** (página oficial de ese modelo), **Copiar
+casillas (JSON)** para pegarlas en otro programa o mandárselas al gestor y
+**Diseño de registro oficial** en los que lo admiten.
+
+Al final de la guía hay una tarjeta **«Presentarlo automáticamente, estilo
+TaxDown»** con las cuatro vías reales: guiado en la Sede, fichero con diseño
+de registro, API de un colaborador social y robot sobre la Sede (RPA). La
+AEAT no publica API de presentación, así que la app no promete enviar sola:
+documenta y prepara los datos.
+
+### Plazos automáticos
+
+Cada obligación de la guía muestra ya su **próximo plazo pendiente**: el
+primer trimestre del año que no esté marcado como presentado, con la fecha
+límite habitual (20 de abril/julio/octubre, 30 de enero el 4T, 30 de enero
+el 390, 28 de febrero el 347, 30 de junio el 100) y los días que faltan. Si
+el plazo ya pasó y sigue sin marcar, sale en rojo con «⚠ Sin presentar». Al
+marcar un trimestre, el aviso salta solo al siguiente.
+
+### ¿Se puede presentar automáticamente por API?
+
+Hoy no: la AEAT no publica una API para presentar declaraciones. Todo pasa
+por su Sede con **certificado electrónico, DNIe o Cl@ve**. Las vías reales
+de automatización, de menos a más esfuerzo, son:
+
+1. **Teclear con el borrador al lado**: el PDF da los importes casilla a
+   casilla y el formulario web los suma solo.
+2. **Fichero con diseño de registro**: el 303, el 390, el 347 y el 349
+   admiten subir un fichero con el formato publicado por la AEAT. Requiere
+   implementar ese diseño por ejercicio (cambia cada año) y firmarlo en la
+   Sede.
+3. **Robot sobre la Sede (RPA)**: automatizar el navegador con un
+   certificado instalado en el equipo. Frágil (la Sede cambia) y el
+   certificado debe estar en poder del autónomo.
+4. **Intermediario autorizado**: un servicio de facturación que presente por
+   el autónomo; el autónomo le da de alta como colaborador. Implica sacar
+   los datos de la app.
+
+El JSON de las casillas es el formato pensado para las opciones 2, 3 y 4.
+Los modelos que la app aún no rellena (390, 347, 349, 100, 111, 115) siguen
+teniendo su calendario y su explicación en la guía.
+
+### Pantallas pequeñas, desplazamiento y zoom
+
+- La ventana puede bajar hasta 820 × 540 y **todo el contenido tiene barra de
+  desplazamiento**: en Inicio y en la guía la barra es vertical y horizontal;
+  las listas, el editor, clientes, artículos, contabilidad y ajustes ya
+  llevaban la suya.
+- La barra lateral se adapta al ancho de la ventana (24 %, entre 158 y 232
+  puntos) y se puede **arrastrar** para hacerla más estrecha o más ancha. El
+  panel de detalle de un documento también se arrastra (240-520 puntos) y
+  arranca más estrecho en ventanas menores de 1180 puntos.
+- **Zoom**: botones `−`, `+` y `100 %` bajo el título de la barra lateral, más
+  `Ctrl` + rueda y `Ctrl` + `+` / `Ctrl` + `−` que ya interpreta egui. Se
+  limita al 60-200 % y se guarda en `datos.json` (`"zoom": 1.0`), así que se
+  recuerda al volver a abrir.

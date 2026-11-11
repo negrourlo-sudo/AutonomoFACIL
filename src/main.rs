@@ -6,17 +6,24 @@
 //! · Registro Verifactu con huella SHA-256 encadenada y QR de la AEAT.
 //! · Exportación FacturaE 3.2.2 y PDF A4 sin dependencias nativas.
 
+mod asistente;
 mod contab;
 mod fiscal;
+mod graficas;
+mod logo;
+mod modelos;
 mod facturae;
 mod model;
 mod pdf;
 mod perf;
+mod presentacion;
+mod recursos;
 mod version;
 mod store;
 mod tema;
 mod ui;
 mod verifactu;
+mod voz;
 
 use eframe::egui;
 
@@ -33,7 +40,7 @@ fn main() -> eframe::Result {
     let opciones = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1260.0, 820.0])
-            .with_min_inner_size([980.0, 620.0])
+            .with_min_inner_size([820.0, 540.0])
             .with_title(format!(
                 "AutónomoFACIL {} — presupuestos y facturas",
                 version::VERSION

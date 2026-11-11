@@ -153,14 +153,35 @@ impl Pagina {
             }
         }
     }
+    /// Dibuja el logo (`/Im1`) en el rectángulo indicado.
+    fn imagen(&mut self, x: f32, y_top: f32, w: f32, h: f32) {
+        self.ops.push_str(&format!(
+            "q {:.2} 0 0 {:.2} {:.2} {:.2} cm /Im1 Do Q\n",
+            w,
+            h,
+            x,
+            y(y_top + h)
+        ));
+    }
 }
 
-fn ensamblar(paginas: Vec<String>) -> Vec<u8> {
+/// Escala (ancho, alto) para que quepa en la caja sin deformarse.
+fn ajustar(ancho: f32, alto: f32, max_w: f32, max_h: f32) -> (f32, f32) {
+    if ancho <= 0.0 || alto <= 0.0 {
+        return (0.0, 0.0);
+    }
+    let escala = (max_w / ancho).min(max_h / alto);
+    (ancho * escala, alto * escala)
+}
+
+fn ensamblar(paginas: Vec<String>, logo: Option<&crate::logo::Jpeg>) -> Vec<u8> {
     let n = paginas.len();
     let mut out: Vec<u8> = Vec::with_capacity(8192 * n + 1024);
     out.extend_from_slice(b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n");
 
-    let total_obj = 4 + n * 2;
+    // Con logo, la imagen ocupa el objeto 5 y las páginas empiezan en el 6.
+    let primero = if logo.is_some() { 6 } else { 5 };
+    let total_obj = primero - 1 + n * 2;
     let mut offsets = vec![0usize; total_obj + 1];
 
     fn obj(out: &mut Vec<u8>, offsets: &mut [usize], id: usize, cuerpo: &str) {
@@ -169,7 +190,7 @@ fn ensamblar(paginas: Vec<String>) -> Vec<u8> {
     }
 
     obj(&mut out, &mut offsets, 1, "<</Type/Catalog/Pages 2 0 R>>");
-    let kids: Vec<String> = (0..n).map(|i| format!("{} 0 R", 5 + i * 2)).collect();
+    let kids: Vec<String> = (0..n).map(|i| format!("{} 0 R", primero + i * 2)).collect();
     obj(
         &mut out,
         &mut offsets,
@@ -189,16 +210,35 @@ fn ensamblar(paginas: Vec<String>) -> Vec<u8> {
         "<</Type/Font/Subtype/Type1/BaseFont/Helvetica-Bold/Encoding/WinAnsiEncoding>>",
     );
 
+    // El JPEG se copia tal cual: es lo único que hay que embeber.
+    if let Some(l) = logo {
+        offsets[5] = out.len();
+        out.extend_from_slice(
+            format!(
+                "5 0 obj\n<</Type/XObject/Subtype/Image/Width {}/Height {}/ColorSpace/DeviceRGB/BitsPerComponent 8/Filter/DCTDecode/Length {}>>\nstream\n",
+                l.ancho,
+                l.alto,
+                l.datos.len()
+            )
+            .as_bytes(),
+        );
+        out.extend_from_slice(&l.datos);
+        out.extend_from_slice(b"\nendstream\nendobj\n");
+    }
+
     for (i, contenido) in paginas.iter().enumerate() {
-        let pid = 5 + i * 2;
+        let pid = primero + i * 2;
         let cid = pid + 1;
         obj(
             &mut out,
             &mut offsets,
             pid,
             &format!(
-                "<</Type/Page/Parent 2 0 R/MediaBox[0 0 {:.2} {:.2}]/Resources<</Font<</F1 3 0 R/F2 4 0 R>>>>/Contents {} 0 R>>",
-                ANCHO, ALTO, cid
+                "<</Type/Page/Parent 2 0 R/MediaBox[0 0 {:.2} {:.2}]/Resources<</Font<</F1 3 0 R/F2 4 0 R>>{}/Contents {} 0 R>>",
+                ANCHO,
+                ALTO,
+                if logo.is_some() { "/XObject<</Im1 5 0 R>>" } else { "" },
+                cid
             ),
         );
         let stream = format!(
@@ -227,8 +267,23 @@ fn ensamblar(paginas: Vec<String>) -> Vec<u8> {
 }
 
 /// Cabecera de página: emisor a la izquierda, identificación a la derecha.
-fn cabecera(p: &mut Pagina, doc: &Documento, empresa: &Empresa, titulo: &str) {
+fn cabecera(
+    p: &mut Pagina,
+    doc: &Documento,
+    empresa: &Empresa,
+    titulo: &str,
+    logo: Option<&crate::logo::Jpeg>,
+) {
     p.rect(0.0, 0.0, ANCHO, 6.0, 0.10);
+
+    // El logo va arriba a la izquierda y el bloque de la empresa se aparta a su
+    // derecha, sin mover nada en vertical.
+    let mut x = MARGEN;
+    if let Some(l) = logo {
+        let (w, h) = ajustar(l.ancho as f32, l.alto as f32, 150.0, 44.0);
+        p.imagen(MARGEN, MARGEN + 4.0 + (44.0 - h) / 2.0, w, h);
+        x = MARGEN + w + 12.0;
+    }
 
     let mut y = MARGEN + 14.0;
     let nombre = if empresa.nombre.trim().is_empty() {
@@ -236,10 +291,10 @@ fn cabecera(p: &mut Pagina, doc: &Documento, empresa: &Empresa, titulo: &str) {
     } else {
         &empresa.nombre
     };
-    p.texto(MARGEN, y, 15.0, true, 0.10, &nombre.to_uppercase());
+    p.texto(x, y, 15.0, true, 0.10, &nombre.to_uppercase());
     y += 14.0;
     if !empresa.nif.trim().is_empty() {
-        p.texto(MARGEN, y, 9.0, false, 0.35, &format!("NIF {}", empresa.nif));
+        p.texto(x, y, 9.0, false, 0.35, &format!("NIF {}", empresa.nif));
         y += 11.0;
     }
     let mut linea_dir = empresa.direccion.clone();
@@ -247,19 +302,19 @@ fn cabecera(p: &mut Pagina, doc: &Documento, empresa: &Empresa, titulo: &str) {
         linea_dir.push_str(&format!(" · {} {}", empresa.cp, empresa.ciudad));
     }
     if !linea_dir.trim().is_empty() {
-        p.texto(MARGEN, y, 9.0, false, 0.35, &linea_dir);
+        p.texto(x, y, 9.0, false, 0.35, &linea_dir);
         y += 11.0;
     }
     if !empresa.provincia.trim().is_empty() {
-        p.texto(MARGEN, y, 9.0, false, 0.35, &empresa.provincia);
+        p.texto(x, y, 9.0, false, 0.35, &empresa.provincia);
         y += 11.0;
     }
     if !empresa.email.trim().is_empty() {
-        p.texto(MARGEN, y, 9.0, false, 0.35, &empresa.email);
+        p.texto(x, y, 9.0, false, 0.35, &empresa.email);
         y += 11.0;
     }
     if !empresa.telefono.trim().is_empty() {
-        p.texto(MARGEN, y, 9.0, false, 0.35, &empresa.telefono);
+        p.texto(x, y, 9.0, false, 0.35, &empresa.telefono);
     }
 
     p.texto_der(DERECHA, MARGEN + 16.0, 22.0, true, 0.10, titulo);
@@ -377,6 +432,16 @@ fn bloque_totales(p: &mut Pagina, doc: &Documento, y: f32) -> f32 {
         );
         y += 13.0;
     }
+    if doc.recargo_pb > 0 {
+        fila(
+            p,
+            y,
+            &format!("Recargo de equivalencia {} %", fmt_pb(doc.recargo_pb)),
+            fmt_cents(t.cuota_recargo),
+            false,
+        );
+        y += 13.0;
+    }
     if doc.irpf_pb > 0 {
         fila(
             p,
@@ -490,9 +555,11 @@ pub fn documento(doc: &Documento, empresa: &Empresa) -> Vec<u8> {
 
     let mut paginas: Vec<String> = Vec::with_capacity(total_paginas);
 
+    let logo = crate::logo::cargar(&empresa.logo).ok();
+
     for (i, grupo) in grupos.iter().enumerate() {
         let mut p = Pagina::nueva();
-        cabecera(&mut p, doc, empresa, titulo);
+        cabecera(&mut p, doc, empresa, titulo, logo.as_ref());
 
         let mut y = MARGEN + 74.0;
         if i == 0 {
@@ -536,7 +603,7 @@ pub fn documento(doc: &Documento, empresa: &Empresa) -> Vec<u8> {
         paginas.push(p.ops);
     }
 
-    ensamblar(paginas)
+    ensamblar(paginas, logo.as_ref())
 }
 
 /// Texto apto para un nombre de fichero en Windows: sin acentos, sin
@@ -571,6 +638,129 @@ fn slug(texto: &str) -> String {
         salida.pop();
     }
     salida
+}
+
+/// PDF de un modelo fiscal con las casillas ya calculadas. Es un borrador
+/// para revisar y teclear en la Sede, no un documento oficial de la AEAT.
+pub fn modelo(m: &crate::modelos::Modelo, empresa: &Empresa) -> Vec<u8> {
+    let mut filas: Vec<(bool, String, String, String)> = Vec::new();
+    for s in &m.secciones {
+        filas.push((true, String::new(), s.titulo.to_string(), String::new()));
+        for c in &s.casillas {
+            filas.push((
+                false,
+                c.numero.to_string(),
+                c.etiqueta.to_string(),
+                c.valor.texto(),
+            ));
+        }
+    }
+
+    let por_pagina = 24usize;
+    let total = if filas.is_empty() {
+        1
+    } else {
+        (filas.len() + por_pagina - 1) / por_pagina
+    };
+    let mut paginas = Vec::with_capacity(total);
+
+    for i in 0..total {
+        let mut p = Pagina::nueva();
+
+        p.texto(
+            MARGEN,
+            MARGEN + 8.0,
+            16.0,
+            true,
+            0.1,
+            &format!("MODELO {}", m.codigo),
+        );
+        p.texto_der(DERECHA, MARGEN + 8.0, 11.0, true, 0.15, &m.periodo);
+        p.texto(MARGEN, MARGEN + 26.0, 9.5, false, 0.30, m.titulo);
+        p.linea(MARGEN, MARGEN + 34.0, DERECHA, MARGEN + 34.0, 1.0, 0.15);
+        // El titular en una frase: se entiende sin mirar las casillas.
+        for (n, linea) in envolver(&m.resumen(), 96).iter().take(2).enumerate() {
+            p.texto(
+                MARGEN,
+                MARGEN + 44.0 + n as f32 * 11.0,
+                11.0,
+                true,
+                0.10,
+                linea,
+            );
+        }
+
+        p.texto(MARGEN, MARGEN + 72.0, 7.5, true, 0.45, "DECLARANTE");
+        p.texto(
+            MARGEN,
+            MARGEN + 84.0,
+            9.5,
+            false,
+            0.15,
+            &format!("{} · {}", empresa.nombre, empresa.nif),
+        );
+        p.texto_der(DERECHA, MARGEN + 84.0, 7.5, true, 0.45, "BORRADOR");
+
+        let mut y = MARGEN + 104.0;
+        p.texto(MARGEN, y, 7.0, true, 0.50, "CASILLA");
+        p.texto(MARGEN + 48.0, y, 7.0, true, 0.50, "CONCEPTO");
+        p.texto_der(DERECHA, y, 7.0, true, 0.50, "IMPORTE");
+        y += 5.0;
+        p.linea(MARGEN, y, DERECHA, y, 0.6, 0.55);
+        y += 16.0;
+
+        for (es_seccion, num, etq, valor) in filas.iter().skip(i * por_pagina).take(por_pagina) {
+            if *es_seccion {
+                p.rect(MARGEN, y - 10.0, DERECHA - MARGEN, 16.0, 0.95);
+                p.texto(MARGEN + 2.0, y, 8.5, true, 0.20, etq);
+                y += 20.0;
+            } else {
+                p.caja(MARGEN, y - 10.0, 38.0, 13.0, 0.5, 0.60);
+                p.texto(MARGEN + 4.0, y, 8.0, true, 0.25, num);
+                let recorte: String = etq.chars().take(70).collect();
+                p.texto(MARGEN + 48.0, y, 8.5, false, 0.20, &recorte);
+                p.texto_der(DERECHA, y, 8.5, true, 0.10, valor);
+                y += 16.0;
+            }
+        }
+
+        let pie_y = ALTO - 82.0;
+        p.linea(MARGEN, pie_y - 10.0, DERECHA, pie_y - 10.0, 0.4, 0.75);
+        for (n, linea) in envolver(m.nota, 104).iter().take(3).enumerate() {
+            p.texto(MARGEN, pie_y + n as f32 * 9.5, 7.0, false, 0.45, linea);
+        }
+        p.texto_der(
+            DERECHA,
+            ALTO - 40.0,
+            7.0,
+            false,
+            0.55,
+            &format!("AutónomoFACIL · página {} de {}", i + 1, total),
+        );
+
+        paginas.push(p.ops);
+    }
+
+    ensamblar(paginas, None)
+}
+
+/// Parte un texto largo en líneas de como mucho `ancho` caracteres.
+fn envolver(texto: &str, ancho: usize) -> Vec<String> {
+    let mut lineas = Vec::new();
+    let mut actual = String::new();
+    for palabra in texto.split_whitespace() {
+        if !actual.is_empty() && actual.chars().count() + 1 + palabra.chars().count() > ancho {
+            lineas.push(std::mem::take(&mut actual));
+        }
+        if !actual.is_empty() {
+            actual.push(' ');
+        }
+        actual.push_str(palabra);
+    }
+    if !actual.is_empty() {
+        lineas.push(actual);
+    }
+    lineas
 }
 
 /// Nombre que dice qué es el fichero sin abrirlo:
@@ -666,6 +856,49 @@ mod tests {
         assert!(texto.contains("\\361"));
         // El flujo de contenido debe ser ASCII puro para que /Length cuadre.
         assert!(bytes.iter().all(|b| *b == b'\n' || (32..127).contains(b) || *b == b'\r' || *b == 0xE2 || *b == 0xE3 || *b == 0xCF || *b == 0xD3));
+    }
+
+    #[test]
+    fn el_pdf_de_un_modelo_lleva_las_casillas() {
+        let db = crate::store::Db::default();
+        let m = crate::modelos::iva_303(&db, 2026, 1);
+        let bytes = modelo(&m, &Empresa::default());
+        assert!(bytes.starts_with(b"%PDF"));
+        assert!(bytes.len() > 1500);
+        let texto = String::from_utf8_lossy(&bytes);
+        assert!(
+            texto.contains("Sale a"),
+            "el PDF tiene que llevar el resumen en una frase"
+        );
+        assert!(texto.contains("MODELO 303"));
+        assert!(texto.contains("BORRADOR"));
+    }
+
+    #[test]
+    fn el_logo_se_embebe_y_se_dibuja() {
+        // JPEG mínimo: cabecera JFIF y SOF0 que declara 120x40.
+        let mut jpg = vec![0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x07];
+        jpg.extend_from_slice(b"JFIF\0");
+        jpg.extend_from_slice(&[0xFF, 0xC0, 0x00, 0x11, 0x08, 0x00, 0x28, 0x00, 0x78]);
+        jpg.extend_from_slice(&[0x03, 0x01, 0x11, 0x00, 0x02, 0x11, 0x01, 0x03, 0x11, 0x01]);
+        jpg.extend_from_slice(&[0xFF, 0xD9]);
+        let ruta = std::env::temp_dir().join("autonomofacil-logo-prueba.jpg");
+        std::fs::write(&ruta, &jpg).expect("escribir el jpeg de prueba");
+
+        let (d, mut e) = doc();
+        e.logo = ruta.display().to_string();
+        let con = String::from_utf8_lossy(&documento(&d, &e)).to_string();
+        assert!(con.contains("/Subtype/Image"), "el logo va como XObject");
+        assert!(con.contains("/DCTDecode"), "el JPEG se copia sin recodificar");
+        assert!(con.contains("/Im1 Do"), "y se dibuja en la cabecera");
+        assert!(con.contains("/XObject<</Im1 5 0 R>>"));
+
+        // Sin logo el PDF no lleva imagen y conserva la numeración de antes.
+        e.logo.clear();
+        let sin = String::from_utf8_lossy(&documento(&d, &e)).to_string();
+        assert!(!sin.contains("/Subtype/Image"));
+        assert!(sin.contains("5 0 obj"));
+        let _ = std::fs::remove_file(&ruta);
     }
 
     #[test]

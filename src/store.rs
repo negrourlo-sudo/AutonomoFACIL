@@ -30,6 +30,29 @@ pub struct Db {
     /// `año-modelo-1T` para los trimestrales.
     #[serde(default)]
     pub presentados: Vec<String>,
+    /// Zoom de la interfaz (1.0 = 100 %). Se guarda para no reajustarlo cada
+    /// vez; con 0 (datos antiguos) se usa 1.0.
+    #[serde(default = "zoom_uno")]
+    pub zoom: f32,
+    /// Valores escritos a mano en las casillas: clave `303-2026-1T` o
+    /// `390-2026-anual` → número de casilla → lo que se tecleó. Se guarda el
+    /// texto para no reformatear mientras se escribe.
+    #[serde(default)]
+    pub ajustes_modelos: std::collections::BTreeMap<
+        String,
+        std::collections::BTreeMap<String, String>,
+    >,
+    /// Justificante de cada modelo presentado (nº de registro, CSV o lo que
+    /// dé la Sede), con la misma clave que `presentados`.
+    #[serde(default)]
+    pub justificantes: std::collections::BTreeMap<String, String>,
+    /// El asistente de puesta en marcha ya se ha completado. Mientras sea
+    /// falso, el programa abre directamente el asistente.
+    #[serde(default)]
+    pub asistente_completado: bool,
+    /// El tutorial se lee en voz alta con una voz femenina del sistema.
+    #[serde(default = "voz_si")]
+    pub voz: bool,
     pub next_id: u64,
     #[serde(skip)]
     pub ruta: PathBuf,
@@ -46,10 +69,23 @@ impl Default for Db {
             cerrados: Vec::new(),
             ultimo_cliente_id: 0,
             presentados: Vec::new(),
+            zoom: 1.0,
+            ajustes_modelos: Default::default(),
+            justificantes: Default::default(),
+            asistente_completado: false,
+            voz: true,
             next_id: 1,
             ruta: ruta_datos(),
         }
     }
+}
+
+fn zoom_uno() -> f32 {
+    1.0
+}
+
+fn voz_si() -> bool {
+    true
 }
 
 /// Carpeta de datos de la aplicación.

@@ -21,6 +21,48 @@ pub struct Obligacion {
 /// Modelos que le tocan a esta actividad. Los condicionales se listan igual:
 /// el usuario decide si le aplican.
 pub fn obligaciones(act: Actividad) -> Vec<Obligacion> {
+    obligaciones_con(act, &Empresa::default())
+}
+
+/// Modelos según actividad y régimen: en módulos el pago a cuenta es el 131,
+/// en recargo de equivalencia no hay 303 ni 390, y el SII quita el 390.
+pub fn obligaciones_con(act: Actividad, empresa: &Empresa) -> Vec<Obligacion> {
+    let mut v = obligaciones_base(act);
+
+    if empresa.recargo_equivalencia {
+        v.retain(|o| o.codigo != "303" && o.codigo != "390");
+        v.insert(
+            0,
+            Obligacion {
+                codigo: "309",
+                nombre: "IVA · declaración no periódica",
+                plazo: "30 días desde la operación",
+                detalle: "En recargo de equivalencia no se presentan 303 ni 390. El 309 sólo hace falta por adquisiciones intracomunitarias, inversión del sujeto pasivo o venta de inmuebles.",
+                trimestral: false,
+            },
+        );
+    }
+
+    if empresa.sii {
+        v.retain(|o| o.codigo != "390");
+        if let Some(o) = v.iter_mut().find(|o| o.codigo == "303") {
+            o.plazo = "1–20 del mes siguiente (con SII, mensual)";
+            o.detalle = "Con SII el 303 es mensual y los libros se llevan en tiempo real; el 390 no se presenta.";
+        }
+    }
+
+    if empresa.regimen_irpf.es_objetiva() {
+        if let Some(o) = v.iter_mut().find(|o| o.codigo == "130") {
+            o.codigo = "131";
+            o.nombre = "Pago fraccionado en módulos";
+            o.detalle = "Sustituye al 130 en estimación objetiva: se calcula con los módulos de tu actividad, no con tus facturas.";
+        }
+    }
+
+    v
+}
+
+fn obligaciones_base(act: Actividad) -> Vec<Obligacion> {
     let mut v = vec![
         Obligacion {
             codigo: "303",
@@ -94,12 +136,19 @@ pub fn obligaciones(act: Actividad) -> Vec<Obligacion> {
         },
     ];
 
-    if act == Actividad::Digital {
+    if matches!(act, Actividad::Digital | Actividad::Comercio) {
         v.push(Obligacion {
             codigo: "368",
             nombre: "Ventanilla única (OSS)",
             plazo: "Último día del mes siguiente al trimestre",
             detalle: "Sólo si vendes tú directamente a particulares de la UE más de 10.000 € al año. Vendiendo a través de Steam no hace falta: Valve es el vendedor.",
+            trimestral: true,
+        });
+        v.push(Obligacion {
+            codigo: "369",
+            nombre: "Ventanilla única de importación (IOSS)",
+            plazo: "Último día del mes siguiente al trimestre",
+            detalle: "Sólo si vendes desde fuera de la UE paquetes de hasta 150 € y te registras en la IOSS.",
             trimestral: true,
         });
     }
@@ -215,6 +264,105 @@ pub fn alternar(db: &mut Db, clave: &str) {
     } else {
         db.presentados.push(clave.to_string());
     }
+}
+
+/// Fecha límite de un modelo para el periodo indicado (`tri` 0 = anual).
+/// Son las fechas habituales; si caen en festivo la AEAT las desplaza.
+pub fn vence(codigo: &str, trimestral: bool, anyo: i32, tri: u32) -> Option<chrono::NaiveDate> {
+    let f = |y: i32, m: u32, d: u32| chrono::NaiveDate::from_ymd_opt(y, m, d);
+    if trimestral {
+        match tri {
+            1 => f(anyo, 4, 20),
+            2 => f(anyo, 7, 20),
+            3 => f(anyo, 10, 20),
+            4 => f(anyo + 1, 1, 30),
+            _ => None,
+        }
+    } else {
+        match codigo {
+            "390" => f(anyo + 1, 1, 30),
+            "190" | "180" => f(anyo + 1, 1, 31),
+            "347" => f(anyo + 1, 2, 28),
+            "100" => f(anyo + 1, 6, 30),
+            _ => None,
+        }
+    }
+}
+
+/// Próximo plazo pendiente de una obligación: (periodo, fecha, días que
+/// faltan). Si todos los plazos del año ya pasaron, devuelve el más antiguo
+/// con días negativos para poder avisar de que está sin presentar.
+pub fn proximo_plazo(
+    db: &Db,
+    ob: &Obligacion,
+    anyo: i32,
+    hoy: chrono::NaiveDate,
+) -> Option<(String, chrono::NaiveDate, i64)> {
+    let mut pendientes: Vec<(String, chrono::NaiveDate)> = Vec::new();
+    if ob.trimestral {
+        for q in 1..=4u32 {
+            let clave = format!("{anyo}-{}-{q}T", ob.codigo);
+            if esta_presentado(db, &clave) {
+                continue;
+            }
+            if let Some(f) = vence(ob.codigo, true, anyo, q) {
+                pendientes.push((format!("{anyo} · {q}T"), f));
+            }
+        }
+    } else {
+        let clave = format!("{anyo}-{}", ob.codigo);
+        if !esta_presentado(db, &clave) {
+            if let Some(f) = vence(ob.codigo, false, anyo, 0) {
+                pendientes.push((format!("{anyo} · anual"), f));
+            }
+        }
+    }
+    pendientes.sort_by_key(|(_, f)| *f);
+    let elegido = pendientes
+        .iter()
+        .find(|(_, f)| *f >= hoy)
+        .or_else(|| pendientes.first())
+        .cloned();
+    elegido.map(|(etiqueta, fecha)| (etiqueta, fecha, (fecha - hoy).num_days()))
+}
+
+/// Lo que más se atasca al vender por internet en España, con la norma que
+/// hay detrás. Se muestra en la guía para comercio y venta digital.
+pub fn guia_comercio() -> Vec<(&'static str, &'static str)> {
+    vec![
+        (
+            "Vender a particulares de la UE: el umbral de 10.000 €",
+            "Si vendes a distancia a consumidores de otros países de la UE más de 10.000 € al año (IVA excluido), el IVA se paga en el país del cliente y se declara en el 368 (OSS). Por debajo puedes seguir aplicando el IVA español.",
+        ),
+        (
+            "Vender desde fuera de la UE: IOSS",
+            "Si importas y envías a la UE paquetes de hasta 150 €, puedes registrarte en la IOSS y declarar en el 369, cobrando el IVA al cliente en la propia venta.",
+        ),
+        (
+            "Marketplaces: quién es el vendedor",
+            "Si vendes por Amazon, Steam, Etsy o similar, la plataforma suele ser el proveedor a efectos de IVA (vendedor presunto) y liquida el impuesto. Tú le facturas a la plataforma, no al cliente final.",
+        ),
+        (
+            "Factura simplificada",
+            "Puedes emitir simplificada hasta 400 € (IVA incluido) en general y hasta 3.000 € en ventas al por menor. No vale para entregas intracomunitarias ni para ventas a distancia desde otro Estado miembro.",
+        ),
+        (
+            "Devoluciones y abonos",
+            "Una devolución se documenta con factura rectificativa, no borrando la original: el registro de Verifactu ya está encadenado.",
+        ),
+        (
+            "Pasarelas de pago",
+            "Stripe, PayPal o Redsys ingresan el neto con sus comisiones: la comisión es un gasto deducible con su factura, y el ingreso que declaras es el bruto que paga el cliente.",
+        ),
+        (
+            "Recargo de equivalencia",
+            "Si eres minorista en recargo de equivalencia, no liquidas IVA de tus ventas ni deduces el soportado: tus proveedores te repercuten IVA + recargo y lo ingresan ellos.",
+        ),
+        (
+            "Criterio de caja y SII",
+            "El criterio de caja retrasa el devengo al cobro; el SII obliga a llevar los libros en tiempo real y exime del 390.",
+        ),
+    ]
 }
 
 pub struct Fila349 {
@@ -348,6 +496,73 @@ mod tests {
             .collect();
         assert!(digital.contains(&"368"));
         assert!(!servicios.contains(&"368"));
+    }
+
+    #[test]
+    fn el_plazo_salta_los_trimestres_ya_marcados() {
+        let mut db = Db::default();
+        let ob = obligaciones(Actividad::Servicios)
+            .into_iter()
+            .find(|o| o.codigo == "303")
+            .unwrap();
+        let hoy = NaiveDate::from_ymd_opt(2026, 4, 1).unwrap();
+        let (periodo, fecha, dias) = proximo_plazo(&db, &ob, 2026, hoy).unwrap();
+        assert_eq!(periodo, "2026 · 1T");
+        assert_eq!(fecha, NaiveDate::from_ymd_opt(2026, 4, 20).unwrap());
+        assert_eq!(dias, 19);
+
+        alternar(&mut db, "2026-303-1T");
+        let (periodo, _, _) = proximo_plazo(&db, &ob, 2026, hoy).unwrap();
+        assert_eq!(periodo, "2026 · 2T");
+    }
+
+    #[test]
+    fn el_347_vence_el_28_de_febrero_del_ano_siguiente() {
+        let ob = obligaciones(Actividad::Servicios)
+            .into_iter()
+            .find(|o| o.codigo == "347")
+            .unwrap();
+        let fecha = vence(ob.codigo, false, 2026, 0).unwrap();
+        assert_eq!(fecha, NaiveDate::from_ymd_opt(2027, 2, 28).unwrap());
+    }
+
+    #[test]
+    fn el_regimen_cambia_los_modelos() {
+        let mut objetiva = Empresa::default();
+        objetiva.regimen_irpf = RegimenIrpf::Objetiva;
+        let codigos: Vec<&str> = obligaciones_con(Actividad::Servicios, &objetiva)
+            .iter()
+            .map(|o| o.codigo)
+            .collect();
+        assert!(codigos.contains(&"131"), "{codigos:?}");
+        assert!(!codigos.contains(&"130"), "{codigos:?}");
+
+        let mut recargo = Empresa::default();
+        recargo.recargo_equivalencia = true;
+        let codigos: Vec<&str> = obligaciones_con(Actividad::Comercio, &recargo)
+            .iter()
+            .map(|o| o.codigo)
+            .collect();
+        assert!(!codigos.contains(&"303"), "{codigos:?}");
+        assert!(!codigos.contains(&"390"), "{codigos:?}");
+        assert!(codigos.contains(&"309"), "{codigos:?}");
+
+        let mut sii = Empresa::default();
+        sii.sii = true;
+        let codigos: Vec<&str> = obligaciones_con(Actividad::Servicios, &sii)
+            .iter()
+            .map(|o| o.codigo)
+            .collect();
+        assert!(!codigos.contains(&"390"), "{codigos:?}");
+        assert!(codigos.contains(&"303"), "{codigos:?}");
+    }
+
+    #[test]
+    fn la_guia_de_comercio_cubre_la_venta_online() {
+        let g = guia_comercio();
+        assert!(g.iter().any(|(t, _)| t.contains("10.000")));
+        assert!(g.iter().any(|(_, d)| d.contains("IOSS")));
+        assert!(g.iter().any(|(_, d)| d.contains("rectificativa")));
     }
 
     #[test]
