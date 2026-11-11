@@ -7,4 +7,4 @@
 //! Es la única fuente de verdad: `empaquetar-nsis.sh` la lee de este fichero y
 //! se la pasa a `makensis`, así que no hay números repetidos por el proyecto.
 
-pub const VERSION: &str = "0.6.5.0";
+pub const VERSION: &str = "0.6.11.0";

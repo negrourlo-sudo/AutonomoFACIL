@@ -29,6 +29,27 @@ pub fn obligaciones(act: Actividad) -> Vec<Obligacion> {
 pub fn obligaciones_con(act: Actividad, empresa: &Empresa) -> Vec<Obligacion> {
     let mut v = obligaciones_base(act);
 
+    // Una sociedad no presenta IRPF personal: ni Renta (100) ni pagos a cuenta
+    // 130/131. En su lugar va el Impuesto de Sociedades (200) y su pago
+    // fraccionado (202). Así el listado no confunde a quien tiene una SL.
+    if !empresa.persona_fisica {
+        v.retain(|o| !matches!(o.codigo, "130" | "131" | "100"));
+        v.push(Obligacion {
+            codigo: "200",
+            nombre: "Impuesto sobre Sociedades",
+            plazo: "1–25 de julio (o 25 días tras el cierre)",
+            detalle: "Grava el beneficio del ejercicio en lugar de la Renta. Lo presenta toda sociedad, aunque el resultado sea cero; el autónomo persona física no lo presenta.",
+            trimestral: false,
+        });
+        v.push(Obligacion {
+            codigo: "202",
+            nombre: "Pago fraccionado de Sociedades",
+            plazo: "1–20 de abril, octubre y diciembre",
+            detalle: "A cuenta del 200: 18 % del beneficio del año en curso, o 17 % del resultado del ejercicio anterior si eliges esa modalidad.",
+            trimestral: false,
+        });
+    }
+
     if empresa.recargo_equivalencia {
         v.retain(|o| o.codigo != "303" && o.codigo != "390");
         v.insert(
@@ -138,17 +159,17 @@ fn obligaciones_base(act: Actividad) -> Vec<Obligacion> {
 
     if matches!(act, Actividad::Digital | Actividad::Comercio) {
         v.push(Obligacion {
-            codigo: "368",
-            nombre: "Ventanilla única (OSS)",
-            plazo: "Último día del mes siguiente al trimestre",
-            detalle: "Sólo si vendes tú directamente a particulares de la UE más de 10.000 € al año. Vendiendo a través de Steam no hace falta: Valve es el vendedor.",
-            trimestral: true,
+            codigo: "035",
+            nombre: "Alta en la ventanilla única (OSS/IOSS)",
+            plazo: "Antes de empezar; efectos desde el trimestre siguiente",
+            detalle: "Formulario de alta, cambio o baja en la ventanilla única. Se presenta una vez por cada régimen y es obligatorio antes de usar el 369. Si vendes a través de Steam, Amazon o similar, la plataforma es el vendedor y no lo necesitas.",
+            trimestral: false,
         });
         v.push(Obligacion {
             codigo: "369",
-            nombre: "Ventanilla única de importación (IOSS)",
-            plazo: "Último día del mes siguiente al trimestre",
-            detalle: "Sólo si vendes desde fuera de la UE paquetes de hasta 150 € y te registras en la IOSS.",
+            nombre: "IVA · ventanilla única (OSS/IOSS)",
+            plazo: "OSS: 1–20 del mes siguiente al trimestre · IOSS: mensual",
+            detalle: "Declara de una vez el IVA de cada país de la UE donde tengas particulares. A partir de 10.000 € al año es obligatorio si vendes tú directamente. Sustituye al 303 sólo por esas ventas; el resto sigue en el 303.",
             trimestral: true,
         });
     }
@@ -205,12 +226,44 @@ pub fn guia(act: Actividad) -> Vec<(&'static str, &'static str)> {
                 "Usa el informe mensual de Steamworks como base y emite una factura a Valve por el importe del mes. Si el pago llega neto de retención, factura el bruto y anota la retención en las notas.",
             ),
             (
-                "Si además vendes tú a particulares de la UE",
-                "Por tu propia web o itch.io, con clientes de la UE: hasta 10.000 € al año puedes cobrar IVA español; por encima, alta en OSS (modelo 035) y declarar en el 368.",
+                "Vendes a particulares de la UE: dónde se paga el IVA",
+                "El IVA es del país donde vive el cliente, no el español. Hasta 10.000 € al año (sin IVA) puedes seguir aplicando el 21 % y declararlo en el 303; al pasarlos, tienes que cobrar el IVA de cada país y declararlo en el 369, con alta previa en el 035.",
+            ),
+            (
+                "Qué es y qué no es el 369",
+                "No es un impuesto nuevo: es el mismo IVA, pero declarado una sola vez para toda la UE. La AEAT lo reparte a cada país y tú evitas registrarte en cada uno. Es trimestral (mensual si usas la IOSS).",
+            ),
+            (
+                "Justo en el límite de los 10.000 €",
+                "El umbral se cuenta sumando las ventas a particulares de todos los países de la UE, sin IVA, y se revisa cada año. Al superarlo en el año en curso, el 369 se aplica desde ese momento; puedes elegir el 369 antes de llegar si te compensa.",
             ),
             (
                 "Clientes empresa de la UE",
-                "Si facturas a un estudio o publisher con NIF-IVA, marca la factura como «Intracomunitaria»: sin IVA, con la leyenda de inversión del sujeto pasivo y suma en el 349.",
+                "Con NIF-IVA válido en VIES, la factura va sin IVA y con la leyenda de inversión del sujeto pasivo: el cliente autoliquida en su país. Esa base va al 349, no al 369.",
+            ),
+            (
+                "Clientes de fuera de la UE",
+                "A un particular de EE. UU., Reino Unido o Japón se le factura sin IVA español: es exportación (art. 21 LIVA). Va al 303 como operación sin IVA y no entra ni en el 349 ni en el 369.",
+            ),
+            (
+                "Vendes solo en plataformas: el 369 no te toca",
+                "La plataforma es el vendedor frente al jugador y liquida el IVA de cada país. Tú no cobras IVA al jugador ni presentas el 369: le haces una factura B2B a la plataforma. El 303 y, si es de la UE, el 349 siguen siendo tuyos.",
+            ),
+            (
+                "Plataforma en la UE: Apple o Google (Irlanda)",
+                "La factura va a una empresa irlandesa con su NIF-IVA (IE...): base al 0 % con la cláusula de inversión del sujeto pasivo. Esa base va al 349 y, en el 303, a la casilla 59 (operaciones no sujetas por reglas de localización). Necesitas el alta en el ROI con el 036 o el 037.",
+            ),
+            (
+                "itch.io: la sede manda",
+                "itch.io opera desde EE. UU.: es exportación de servicios, sin IVA y sin 349. Si en algún momento te factura una filial europea, comprueba el NIF-IVA que figure en la factura: si empieza por IE, pasa a ser intracomunitaria y sí va al 349.",
+            ),
+            (
+                "Plataforma fuera de la UE: Valve o Epic (EE. UU.)",
+                "Es exportación de servicios (art. 69 LIVA): factura sin IVA con la leyenda de exportación. Va al 303 en la casilla 59 como operación no sujeta, no entra en el 349 ni en el 369. La retención del 30 % de EE. UU. es otra cosa: se reduce con el W-8BEN y se justifica con el 1042-S.",
+            ),
+            (
+                "Resumen: qué presentas según la sede de la plataforma",
+                "UE (Apple, Google): 303 con la base en la casilla 59 y 349 obligatorio con su NIF-IVA; antes, alta en el ROI. Fuera de la UE (Valve, Epic, itch.io): 303 con la base en la casilla 59 y sin 349. En ambos casos el IVA de la factura es 0 % y deduces el IVA de tus gastos. IRPF: si eres persona física, el beneficio va al 130 y a la Renta; si eres sociedad, al 200 y al 202.",
             ),
         ],
         Actividad::Formacion => vec![
@@ -332,15 +385,15 @@ pub fn guia_comercio() -> Vec<(&'static str, &'static str)> {
     vec![
         (
             "Vender a particulares de la UE: el umbral de 10.000 €",
-            "Si vendes a distancia a consumidores de otros países de la UE más de 10.000 € al año (IVA excluido), el IVA se paga en el país del cliente y se declara en el 368 (OSS). Por debajo puedes seguir aplicando el IVA español.",
+            "Si vendes a distancia a consumidores de otros países de la UE más de 10.000 € al año (IVA excluido), el IVA se paga en el país del cliente y se declara en el 369 (OSS). Por debajo puedes seguir aplicando el IVA español en el 303. El alta en la ventanilla única se pide con el formulario 035.",
         ),
         (
             "Vender desde fuera de la UE: IOSS",
-            "Si importas y envías a la UE paquetes de hasta 150 €, puedes registrarte en la IOSS y declarar en el 369, cobrando el IVA al cliente en la propia venta.",
+            "Si importas y envías a la UE paquetes de hasta 150 €, puedes registrarte en la IOSS (formulario 035) y declarar en el 369, que en este régimen es mensual, cobrando el IVA al cliente en la propia venta.",
         ),
         (
             "Marketplaces: quién es el vendedor",
-            "Si vendes por Amazon, Steam, Etsy o similar, la plataforma suele ser el proveedor a efectos de IVA (vendedor presunto) y liquida el impuesto. Tú le facturas a la plataforma, no al cliente final.",
+            "Si vendes por Amazon, Steam, Apple, Google o similar, la plataforma es el vendedor a efectos de IVA y liquida el impuesto al cliente final. Tú le facturas a ella: si está en la UE (Apple o Google Irlanda), factura intracomunitaria con su NIF-IVA, 349 obligatorio y base en la casilla 59 del 303; si está fuera (Valve, Epic), exportación de servicios, también en la casilla 59 y sin 349. Por estas ventas no se presenta el 369.",
         ),
         (
             "Factura simplificada",
@@ -494,8 +547,26 @@ mod tests {
             .iter()
             .map(|o| o.codigo)
             .collect();
-        assert!(digital.contains(&"368"));
-        assert!(!servicios.contains(&"368"));
+        // El 369 es la declaración; el 035, el alta previa. El 368 ya no se usa.
+        assert!(digital.contains(&"369"), "{digital:?}");
+        assert!(digital.contains(&"035"), "{digital:?}");
+        assert!(!digital.contains(&"368"), "{digital:?}");
+        assert!(!servicios.contains(&"369"));
+    }
+
+    #[test]
+    fn la_guia_digital_explica_el_modelo_por_tipo_de_cliente() {
+        let g = guia(Actividad::Digital);
+        let textos: String = g.iter().map(|(t, d)| format!("{t} {d}")).collect();
+        assert!(textos.contains("369"), "{textos}");
+        assert!(textos.contains("035"), "{textos}");
+        assert!(textos.contains("10.000"));
+        assert!(textos.contains("349"));
+        assert!(textos.contains("exportación"));
+        assert!(textos.contains("casilla 59"), "{textos}");
+        assert!(textos.contains("ROI"), "{textos}");
+        assert!(textos.contains("Resumen"), "{textos}");
+        assert!(textos.contains("130") && textos.contains("200"), "{textos}");
     }
 
     #[test]
@@ -524,6 +595,21 @@ mod tests {
             .unwrap();
         let fecha = vence(ob.codigo, false, 2026, 0).unwrap();
         assert_eq!(fecha, NaiveDate::from_ymd_opt(2027, 2, 28).unwrap());
+    }
+
+    #[test]
+    fn una_sociedad_cambia_irpf_por_sociedades() {
+        let mut e = Empresa::default();
+        e.persona_fisica = false;
+        let c: Vec<&str> = obligaciones_con(Actividad::Servicios, &e)
+            .iter()
+            .map(|o| o.codigo)
+            .collect();
+        assert!(!c.contains(&"130"), "{c:?}");
+        assert!(!c.contains(&"131"), "{c:?}");
+        assert!(!c.contains(&"100"), "{c:?}");
+        assert!(c.contains(&"200"), "{c:?}");
+        assert!(c.contains(&"202"), "{c:?}");
     }
 
     #[test]

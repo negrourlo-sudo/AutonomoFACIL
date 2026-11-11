@@ -36,6 +36,7 @@ const GUIA_303: Guia = Guia {
         "En la Sede elige «Modelo 303. Ejercicio actual. Presentación».",
         "Identifícate con certificado, DNIe o Cl@ve.",
         "«Nueva declaración» y teclea las casillas del borrador: 01/04/07 las bases, 03/06/09 y 150 las cuotas, 28/29 el IVA soportado. El formulario suma solo el 27, el 45 y el 46.",
+        "Si facturaste a empresas de la UE o fuera de España, esa base va en la casilla 59 (operaciones no sujetas por reglas de localización o con inversión del sujeto pasivo), no en las casillas de IVA repercutido.",
         "Comprueba que la casilla 61 coincide con el resultado del borrador.",
         "«Presentar declaración», marca «Conforme» y confirma.",
         "Descarga el justificante (PDF con CSV y nº de registro) y guárdalo. Vuelve aquí y marca el trimestre como presentado.",
@@ -157,8 +158,80 @@ const GUIA_309: Guia = Guia {
     aviso: "Es la excepción del recargo de equivalencia: aunque no se presenten 303 ni 390, el 309 sí hay que presentarlo en esos casos.",
 };
 
-const GUIAS: [&Guia; 7] = [
-    &GUIA_303, &GUIA_130, &GUIA_390, &GUIA_347, &GUIA_349, &GUIA_131, &GUIA_309,
+const GUIA_369: Guia = Guia {
+    codigo: "369",
+    sede: "https://sede.agenciatributaria.gob.es/Sede/iva/iva-comercio-electronico/presentacion-autoliquidaciones-periodicas-modelo-369.html",
+    identificacion: &[
+        "Certificado electrónico o DNIe",
+        "Cl@ve Móvil o Cl@ve PIN (personas físicas)",
+    ],
+    pasos: &[
+        "Comprueba que tienes el alta en ventanilla única (formulario 035); sin ella el 369 no se puede presentar.",
+        "Reúne las ventas a particulares de cada país de la UE del periodo, con la base y el IVA del tipo de ese país.",
+        "En la Sede entra en «Modelo 369. Declaración-liquidación periódica de los regímenes de ventanilla única».",
+        "Identifícate, elige el régimen (Unión o importación) y el periodo.",
+        "Teclea un renglón por país con la base y la cuota; el modelo suma y calcula el resultado a ingresar.",
+        "Presenta y guarda el justificante; marca el trimestre como presentado en la guía.",
+    ],
+    fichero: "Admite presentación por fichero XML con el formato oficial, útil si hay muchos países o movimientos; el formulario web basta para un autónomo.",
+    aviso: "OSS es trimestral (hasta el día 20 del mes siguiente); IOSS es mensual. Si no superas 10.000 € al año en ventas a particulares de la UE, puedes aplicar el 21 % español en el 303 en su lugar, pero la opción se mantiene y conviene revisarla cada año.",
+};
+
+const GUIA_035: Guia = Guia {
+    codigo: "035",
+    sede: "https://sede.agenciatributaria.gob.es/Sede/iva/iva-comercio-electronico/registro-regimen-unionregimen-exterior-regimen_intermediario.html",
+    identificacion: &["Certificado electrónico o DNIe", "Cl@ve"],
+    pasos: &[
+        "Decide el régimen: Unión (OSS) si vendes desde España a particulares de la UE; importación (IOSS) si envías desde fuera de la UE paquetes de hasta 150 €.",
+        "En la Sede entra en «Registro en el régimen de la Unión, régimen exterior y régimen de importación».",
+        "Identifícate y elige el alta.",
+        "Rellena tus datos y marca los regímenes en los que te registras; España será el Estado miembro de identificación.",
+        "Presenta el formulario y guarda el justificante: el alta surte efecto desde el trimestre siguiente.",
+        "A partir de ahí, presenta el 369 cada trimestre (o cada mes si es IOSS).",
+    ],
+    fichero: "Formulario web: el 035 no admite fichero de declaración.",
+    aviso: "Sin el 035 no puedes usar el 369. Para cambiar datos o darte de baja se presenta el mismo formulario 035.",
+};
+
+const GUIA_200: Guia = Guia {
+    codigo: "200",
+    sede: SEDE,
+    identificacion: &[
+        "Certificado electrónico o DNIe",
+        "Cl@ve Móvil o Cl@ve PIN",
+    ],
+    pasos: &[
+        "Cierra las cuentas del ejercicio con la contabilidad al día: el 200 se calcula sobre el resultado contable.",
+        "En la Sede elige «Modelo 200. Impuesto sobre Sociedades. Ejercicio cerrado».",
+        "Identifícate y elige «Nueva declaración»; puedes importar el borrador si lo generas con tu programa de contabilidad.",
+        "Revisa el resultado, los ajustes y las casillas de liquidación.",
+        "Valida, presenta y descarga el justificante con el nº de registro.",
+    ],
+    fichero: "Admite presentación por fichero con el diseño de registro oficial; el formulario web cubre a una pyme sin problema.",
+    aviso: "Plazo: 1–25 de julio si el ejercicio cierra el 31 de diciembre (25 días naturales tras el cierre en los demás casos). No lo presenta el autónomo persona física: ese va con el 100.",
+};
+
+const GUIA_202: Guia = Guia {
+    codigo: "202",
+    sede: SEDE,
+    identificacion: &[
+        "Certificado electrónico o DNIe",
+        "Cl@ve Móvil o Cl@ve PIN",
+    ],
+    pasos: &[
+        "Elige la modalidad: 18 % del beneficio del año en curso, o 17 % del resultado del ejercicio anterior.",
+        "En la Sede busca «Modelo 202. Pago fraccionado del Impuesto sobre Sociedades».",
+        "Identifícate y abre el periodo (abril, octubre o diciembre).",
+        "Rellena la base y el porcentaje de la modalidad elegida; el modelo calcula el ingreso.",
+        "Presenta y guarda el justificante.",
+    ],
+    fichero: "Formulario web; también admite fichero con el diseño de registro.",
+    aviso: "Hay que presentarlo tres veces al año aunque no haya beneficio (a cero). Si el 200 sale a devolver, se compensa en la liquidación anual.",
+};
+
+const GUIAS: &[&Guia] = &[
+    &GUIA_303, &GUIA_130, &GUIA_390, &GUIA_347, &GUIA_349, &GUIA_131, &GUIA_309, &GUIA_369,
+    &GUIA_035, &GUIA_200, &GUIA_202,
 ];
 
 pub fn guia(codigo: &str) -> Option<&'static Guia> {
@@ -188,7 +261,7 @@ pub const AUTOMATICO: &[(&str, &str)] = &[
 /// Enlace oficial con el diseño de registro de cada modelo.
 pub fn diseno_registro(codigo: &str) -> Option<&'static str> {
     match codigo {
-        "390" | "347" | "349" => Some(
+        "390" | "347" | "349" | "369" | "200" | "202" => Some(
             "https://sede.agenciatributaria.gob.es/Sede/ayuda/consultas-informaticas/presentacion-declaraciones-ayuda-tecnica.html",
         ),
         _ => None,

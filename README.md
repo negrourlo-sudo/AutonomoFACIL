@@ -378,9 +378,25 @@ por NIF-IVA del cliente.
 ### Obligaciones y seguimiento
 
 En **Guía rápida** hay una lista de modelos (303, 130, 390, 100, 347, 349, 111,
-190, 115, 180 y, en venta digital, el 368) con plazo y explicación. Cada uno se
+190, 115, 180 y, en venta digital, el 369 y el 035) con plazo y explicación. Cada uno se
 marca por trimestres o una vez al año y el estado se guarda en `datos.json`.
 Debajo, la guía cambia según la actividad.
+
+### Autónomo o sociedad: los modelos cambian
+
+Marca en Ajustes si facturas como persona física o como sociedad. Si eres
+sociedad, la lista quita la Renta (100) y los pagos a cuenta 130/131, y añade el
+**Impuesto de Sociedades (200)** y su **pago fraccionado (202)**; el resto de
+modelos (303, 390, 347, 349, 111, 190…) sigue igual. El asistente lo configura
+solo al elegir «Sociedad» y el resumen del último paso lo explica.
+
+### Perfil: qué falta y por qué
+
+Inicio muestra una tarjeta «Tu perfil, listo para facturar» con los seis datos
+que evitan problemas al emitir y presentar: nombre, NIF, dirección fiscal,
+email, IBAN y régimen/actividad. Cada línea explica al pasar el ratón por qué
+hace falta, y los botones llevan a Ajustes o repiten el asistente. Con los seis
+completos, la tarjeta deja paso a un «Perfil completo».
 
 ### Vender juegos en Steam
 
@@ -391,10 +407,58 @@ y fuera del 349. En el 303 va como operación sin IVA; el bruto es ingreso de
 actividad económica en el 130 y en la Renta.
 - Valve clasifica el pago como *royalty* y retiene un 30 % en EE. UU. si no
 tiene tu **W-8BEN** con NIF; con él aplica el convenio. Guarda el **1042-S**
-para restar lo retenido en la Renta.
-- El **368 (OSS)** sólo hace falta si vendes tú directamente a particulares de la
-UE por encima de 10.000 € al año; con Steam no.
+para restar lo retenido en la Renta.- El **369 (OSS)** sólo hace falta si vendes tú directamente a particulares de la
+  UE por encima de 10.000 € al año, con alta previa en el formulario **035**; con
+  Steam no, porque Valve es el vendedor.
 - Clientes empresa de la UE: factura «Empresa de la UE» y al 349.
+## Venta digital: qué modelo toca según el cliente
+
+La regla no depende del producto, sino de **quién compra y dónde está**:
+
+- **Particular en España**: IVA español del 21 % y va al **303**. Sin 369.
+- **Particular de la UE, hasta 10.000 € al año** (sumando todos los países, sin
+  IVA): puedes seguir aplicando el 21 % español y declararlo en el **303**.
+- **Particular de la UE, por encima de 10.000 €**: el IVA es el del país del
+  cliente y se declara en el **369** (OSS), trimestral. Antes hay que darse de
+  alta con el formulario **035**; no hace falta registrarse en cada país.
+- **Empresa de la UE con NIF-IVA válido en VIES**: factura sin IVA con
+  inversión del sujeto pasivo; esa base va al **349**, no al 369.
+- **Cliente de fuera de la UE** (particular o empresa): exportación, sin IVA
+  español; va al **303** como operación sin IVA y no entra en 349 ni 369.
+- **Marketplace** (Steam, Google Play, Amazon, App Store): la plataforma es el
+  vendedor frente al cliente y liquida el IVA; tú le facturas a ella y por esas
+  ventas no presentas el 369.
+
+El umbral de 10.000 € se cuenta por año natural y sin IVA. Si lo superas a mitad
+de año, el 369 se aplica desde ese momento; si estás cerca, conviene revisarlo
+económicamente antes de decidir. La app todavía no calcula el 369: te explica
+cuándo te toca, te lleva a la página oficial y deja a mano el total de ventas
+sin IVA; el desglose por país se teclea en la Sede, que aplica los tipos.
+
+### Vender solo por plataformas
+
+Si tus juegos se venden únicamente en Steam, Apple App Store, Google Play o
+Epic Games, tú no vendes a los jugadores: le facturas a la plataforma. Ella
+cobra y liquida el IVA del consumidor final, así que **no presentas el 369**.
+Tus modelos son los de una venta B2B:
+
+- **Plataforma en la UE** (Apple o Google, Irlanda): factura intracomunitaria a
+  su NIF-IVA, al 0 % con la cláusula de inversión del sujeto pasivo. Va al
+  **349** y la base se declara en el **303, casilla 59** (operaciones no sujetas
+  por reglas de localización). Necesitas el alta en el **ROI** con el 036/037.
+- **Plataforma fuera de la UE** (Valve, Epic, EE. UU.): exportación de
+  servicios, sin IVA. Va al **303, casilla 59**, y no entra en el 349.
+- En ambos casos el IVA de tus gastos (equipo, software, internet) se deduce en
+  el 303, y la retención de EE. UU. se documenta con el W-8BEN y el 1042-S.
+
+| Sede de la plataforma | 303 | 349 | IRPF |
+|---|---|---|---|
+| UE (Apple, Google — Irlanda) | Sí · casilla 59, informativo | **Sí**, obligatorio con su NIF-IVA | 130 si eres persona física; 200/202 si eres sociedad |
+| Fuera de la UE (Valve, Epic, itch.io) | Sí · casilla 59, informativo | **No** | 130 si eres persona física; 200/202 si eres sociedad |
+
+El 349 es exclusivo de operaciones con la UE: una plataforma de EE. UU. nunca
+entra en él. El 303 se presenta igual, aunque esas ventas no lleven IVA, porque
+ese mismo 303 es el que te deja deducir el IVA de tus gastos.
 
 ## Modelos rellenados (0.4.0)
 
@@ -514,6 +578,26 @@ así que el asistente y el resto del programa nunca dicen cosas distintas.
   **Descartar cambios** o **Seguir editando**. Solo aparece si de verdad has
   tocado algo: se compara una huella de lo que hay en pantalla (incluidos los
   textos a medio escribir) con la del momento de abrirlo.
+
+### Primer arranque: sin datos de ejemplo
+
+La aplicación arranca vacía: `Empresa::default()` nace sin nombre y
+`Db::default()` con clientes, documentos y gastos a cero. No hay ninguna
+empresa sembrada, así que el asistente te pregunta lo tuyo desde el principio.
+
+Los datos viven en `%APPDATA%\AutonomoFACIL\datos.json`, y **reinstalar no los
+borra**: es lo que quieres para no perder facturas al actualizar. Si alguna vez
+quieres volver a empezar como el primer día, cierra la aplicación y aparta ese
+fichero (mejor copiarlo antes). Ojo: en el primer arranque se migra una sola vez
+la carpeta antigua `%APPDATA%\Facturacion`, y si allí sigue habiendo un
+`datos.json` se copiará igual.
+
+### Salir del tutorial
+
+El diálogo de puesta en marcha es modal y no se puede arrastrar ni redimensionar,
+así que no se pierde por la pantalla. Siempre tiene **Salir** a la vista y
+responde a **Esc**: cierra sin guardar nada y volverá a salir al abrir el
+programa. Un clic derecho o un descuido no pueden dejar el tutorial sin salida.
 
 ### Gastos y clientes: NIF y totales en vivo
 
@@ -644,8 +728,10 @@ Para actividades de comercio o venta digital, la guía muestra la tarjeta
 dan, contrastados con la AEAT:
 
 - Ventas a distancia a particulares de la UE: umbral único de **10.000 €** de
-  IVA excluido; por encima, IVA del país del cliente y modelo **368 (OSS)**.
-- Importaciones de hasta **150 €** desde fuera de la UE: **IOSS**, modelo 369.
+  IVA excluido; por encima, IVA del país del cliente y modelo **369 (OSS)**, con
+  alta previa en el **035**.
+- Importaciones de hasta **150 €** desde fuera de la UE: **IOSS**, alta con el
+  **035** y declaración en el **369**, que en este régimen es mensual.
 - **Marketplaces** (Amazon, Steam, Etsy): la plataforma actúa como vendedor
   presunto y liquida el IVA; tú le facturas a ella.
 - **Factura simplificada** hasta 400 € (general) y hasta 3.000 € en ventas al

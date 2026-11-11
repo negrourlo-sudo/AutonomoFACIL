@@ -544,7 +544,8 @@ impl Default for Empresa {
         Self {
             nombre: String::new(),
             nif: String::new(),
-            persona_fisica: false,
+            // Lo habitual es un autónomo; el asistente lo cambia si es sociedad.
+            persona_fisica: true,
             apellidos: String::new(),
             direccion: String::new(),
             cp: String::new(),

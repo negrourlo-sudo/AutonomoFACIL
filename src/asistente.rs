@@ -84,7 +84,7 @@ pub fn plan(p: &Perfil) -> Plan {
 
     let mut resumen = Vec::new();
     resumen.push(if p.es_sociedad {
-        "Tributas como sociedad: el Impuesto de Sociedades sustituye al IRPF y no hay pagos fraccionados 130/131.".to_string()
+        "Tributas como sociedad: el Impuesto de Sociedades (200) sustituye a la Renta y los pagos a cuenta son el 202, no el 130 ni el 131.".to_string()
     } else {
         format!(
             "Eres autónomo persona física en {}.",
@@ -113,6 +113,12 @@ pub fn plan(p: &Perfil) -> Plan {
             "A los comercios minoristas les repercutes un recargo de equivalencia del {} % además del IVA.",
             fmt_pb(recargo_pb)
         ));
+    }
+    if matches!(p.actividad, Actividad::Digital) {
+        resumen.push(
+            "Venta digital, según quién compre: a un particular español, el 21 % en el 303. A un particular de la UE, hasta 10.000 € al año puedes aplicar ese mismo 21 % en el 303; por encima, IVA del país del cliente y 369, con alta en el 035. A una empresa de la UE con VIES, sin IVA y al 349. Fuera de la UE, exportación sin IVA en el 303. Si vendes solo a través de plataformas, ellas liquidan el IVA del jugador y no presentas el 369; con plataformas de la UE (Apple, Google) sí va el 349."
+                .to_string(),
+        );
     }
     let modelos: Vec<&str> = obligaciones.iter().map(|o| o.codigo).collect();
     resumen.push(format!("Modelos que te tocan: {}.", modelos.join(", ")));
@@ -149,7 +155,7 @@ pub fn plan(p: &Perfil) -> Plan {
     }
     if matches!(p.actividad, Actividad::Comercio | Actividad::Digital) {
         consejos.push(
-            "Si vendes tú directamente a particulares de la UE más de 10.000 € al año, necesitas la ventanilla única (368). A través de un marketplace o de Steam, el vendedor es la plataforma."
+            "Si vendes tú directamente a particulares de la UE más de 10.000 € al año, el IVA es el del país del cliente y se declara en el 369 (ventanilla única), con alta previa en el 035. Por debajo de esa cifra puedes aplicar el 21 % español en el 303. A través de un marketplace o de Steam, el vendedor es la plataforma y no presentas el 369."
                 .to_string(),
         );
     }
@@ -189,18 +195,22 @@ pub fn plan(p: &Perfil) -> Plan {
 /// frases cortas, sin listas y sin abreviaturas que suenen raras.
 pub fn guion(paso: usize, p: &Perfil) -> String {
     match paso {
-        0 => "Vamos a empezar. Escribe tu nombre o la razón social de tu empresa, y tu NIF. \
-              Si eres autónomo, marca persona física; si quien factura es una sociedad, \
-              elige sociedad. Con esto sabré quién declara tus impuestos."
+        0 => "Vamos a empezar. Escribe tu nombre o la razón social y tu NIF: con ellos sabré \
+              quién declara y podré ponerlos en tus facturas. Marca si eres persona física \
+              o sociedad, porque de eso depende que tributes en el IRPF o en el Impuesto \
+              sobre Sociedades, y que tu pago a cuenta sea el ciento treinta o no exista."
             .to_string(),
-        1 => "Cuéntame a qué te dedicas. Elige tu actividad y cómo tributas en el IRPF: \
-              la estimación directa simplificada es lo habitual. Marca también si tienes \
-              empleados, si pagas el alquiler de un local o si estás obligado al SII."
+        1 => "Cuéntame a qué te dedicas. La actividad decide el IVA que te propongo y los \
+              modelos que aparecen; el régimen del IRPF decide si tu pago a cuenta es el \
+              ciento treinta o el ciento treinta y uno. Marca también si tienes empleados, \
+              si pagas el alquiler de un local o si estás en el SII, porque cada uno añade \
+              modelos y plazos distintos."
             .to_string(),
-        2 => "Ahora, ¿a quién facturas? Marca los tipos de cliente que uses: particulares, \
-              empresas, profesionales que te retienen el quince por ciento, comercios \
-              minoristas con recargo de equivalencia, empresas de la Unión Europea o \
-              clientes con inversión del sujeto pasivo. Y dime si tú eres minorista."
+        2 => "Ahora, ¿a quién facturas? Esto cambia el IVA y la retención. A empresas y \
+              profesionales españoles se les retiene el quince por ciento; a particulares, no. \
+              Si vendes a particulares de la Unión Europea, a partir de diez mil euros al año \
+              el IVA es el del país del comprador y se declara en el trescientos sesenta y nueve. \
+              Si vendes a empresas de la UE, la factura va sin IVA y al trescientos cuarenta y nueve."
             .to_string(),
         _ => {
             let plan = plan(p);

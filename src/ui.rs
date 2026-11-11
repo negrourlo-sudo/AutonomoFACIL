@@ -1558,7 +1558,11 @@ impl App {
     fn ventana_asistente(&mut self, ctx: &egui::Context) {
         let pantalla = ctx.screen_rect();
         egui::Area::new(egui::Id::new("velo_asistente"))
-            .order(egui::Order::Foreground)
+            // El velo va en Middle: tapa los paneles y campos del fondo, pero
+            // queda SIEMPRE por debajo del diálogo (Foreground). Antes estaba
+            // en Foreground y un clic derecho lo subía a la primera capa y
+            // tapaba el tutorial: se veía un velo y no dejaba avanzar.
+            .order(egui::Order::Middle)
             .fixed_pos(pantalla.min)
             .interactable(true)
             .show(ctx, |ui| {
@@ -1590,9 +1594,18 @@ impl App {
         let mut terminar = false;
         let mut luego = false;
         let mut repetir = false;
+        // Un clic derecho (o el menú del sistema de la ventana) no debe dejar el
+        // diálogo sin salida: Escape y el botón «Salir» están siempre activos.
+        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            luego = true;
+        }
         egui::Window::new("Puesta en marcha")
             .collapsible(false)
             .resizable(false)
+            // Sin arrastre ni redimensionado: es un diálogo, no una ventana de
+            // trabajo, y así no puede quedarse a medias ni fuera de pantalla.
+            .movable(false)
+            .constrain(true)
             .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
             .order(egui::Order::Foreground)
             .default_width(660.0)
@@ -1675,15 +1688,6 @@ impl App {
                     {
                         a.paso += 1;
                     }
-                    if ui
-                        .small_button("Más tarde")
-                        .on_hover_text(
-                            "Volver al inicio sin guardar; el asistente volverá a salir al abrir el programa.",
-                        )
-                        .clicked()
-                    {
-                        luego = true;
-                    }
                 } else if ui
                     .add(
                         egui::Button::new("Guardar y empezar")
@@ -1694,6 +1698,17 @@ impl App {
                 {
                     terminar = true;
                 }
+                // Siempre visible, en todos los pasos: si algo se atasca, se
+                // sale sin guardar y el asistente vuelve a salir al abrir.
+                if ui
+                    .small_button("Salir")
+                    .on_hover_text(
+                        "Cierra el tutorial sin guardar (o pulsa Esc). Volverá a salir al abrir el programa.",
+                    )
+                    .clicked()
+                {
+                    luego = true;
+                }
             });
             if self.voz.hablando() {
                 ui.label(
@@ -1702,6 +1717,11 @@ impl App {
                         .color(tema::TENUE),
                 );
             }
+            ui.label(
+                RichText::new("Esc o «Salir» cierran el tutorial sin guardar nada.")
+                    .size(10.0)
+                    .color(tema::TENUE),
+            );
             });
         if repetir || paso != self.paso_voz {
             if self.db.voz {
@@ -1758,6 +1778,49 @@ impl App {
         );
     }
 
+    /// Datos de la empresa que faltan y por qué importa cada uno.
+    fn perfil_pendiente(&self) -> Vec<(&'static str, &'static str)> {
+        let e = &self.db.empresa;
+        let mut v = Vec::new();
+        if e.nombre.trim().is_empty() {
+            v.push((
+                "Nombre o razón social",
+                "Sale en la cabecera de cada factura y tiene que coincidir con Hacienda.",
+            ));
+        }
+        if e.nif.trim().is_empty() {
+            v.push((
+                "NIF",
+                "Sin NIF la factura no vale como justificante y el 347 la rechaza.",
+            ));
+        }
+        if e.direccion.trim().is_empty() || e.cp.trim().is_empty() || e.ciudad.trim().is_empty() {
+            v.push((
+                "Dirección fiscal",
+                "La piden el FacturaE, el PDF y el 347: calle, código postal y ciudad.",
+            ));
+        }
+        if e.email.trim().is_empty() {
+            v.push((
+                "Email",
+                "Para enviar la factura al cliente y recibir avisos de la AEAT.",
+            ));
+        }
+        if e.iban.trim().is_empty() {
+            v.push((
+                "IBAN",
+                "Para que te paguen por transferencia y para imprimirlo en el PDF.",
+            ));
+        }
+        if !self.db.asistente_completado {
+            v.push((
+                "Régimen y actividad",
+                "Deciden el IVA, la retención y los modelos que te tocan. Son cuatro preguntas.",
+            ));
+        }
+        v
+    }
+
     fn vista_inicio(&mut self, ui: &mut egui::Ui) {
         let facturas: Vec<&Documento> = self.db.facturas();
         let emitidas = facturas
@@ -1803,37 +1866,55 @@ impl App {
             );
         });
 
-        if !self.db.asistente_completado {
+        // Perfil fiscal: qué falta, por qué importa y cómo arreglarlo de un
+        // clic. Seis datos que evitan el 90 % de los problemas al emitir.
+        let pendientes = self.perfil_pendiente();
+        if !pendientes.is_empty() {
             ui.add_space(16.0);
             ui.group(|ui| {
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new("Tu perfil, listo para facturar")
+                            .strong()
+                            .color(tema::ACENTO),
+                    );
+                    ui.label(
+                        RichText::new(format!("{}/6 completado", 6 - pendientes.len()))
+                            .size(11.5)
+                            .color(tema::SUAVE),
+                    );
+                });
                 ui.label(
-                    RichText::new("Termina el asistente de puesta en marcha")
-                        .strong()
-                        .color(tema::ACENTO),
+                    RichText::new("Cada dato tiene un motivo. Pasa el ratón por encima para verlo.")
+                        .size(11.5)
+                        .color(tema::SUAVE),
                 );
-                ui.label(
-                    "Cuatro preguntas para saber tu régimen, el IVA y la retención que aplicas, y qué modelos tienes que presentar.",
-                );
-                if ui.button("Abrir el asistente").clicked() {
-                    self.asistente = Some(Asistente::desde(&self.db.empresa));
-                    self.paso_voz = usize::MAX;
+                for (titulo, motivo) in &pendientes {
+                    ui.label(
+                        RichText::new(format!("· Falta: {titulo}"))
+                            .size(11.5)
+                            .color(egui::Color32::from_rgb(150, 30, 30)),
+                    )
+                    .on_hover_text(*motivo);
                 }
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    if tema::boton_primario(ui, "Completar en Ajustes").clicked() {
+                        self.vista = Vista::Ajustes;
+                    }
+                    if ui.button("Repetir el asistente").clicked() {
+                        self.asistente = Some(Asistente::desde(&self.db.empresa));
+                        self.paso_voz = usize::MAX;
+                    }
+                });
             });
-        }
-
-        if !self.db.empresa.completa() {
-            ui.add_space(16.0);
-            ui.group(|ui| {
-                ui.label(
-                    RichText::new("Falta configurar tu empresa")
-                        .strong()
-                        .color(egui::Color32::from_rgb(150, 30, 30)),
-                );
-                ui.label("Nombre y NIF son obligatorios para poder emitir.");
-                if ui.button("Ir a Ajustes").clicked() {
-                    self.vista = Vista::Ajustes;
-                }
-            });
+        } else {
+            ui.add_space(10.0);
+            ui.label(
+                RichText::new("✓ Perfil completo: nombre, NIF, dirección, email, IBAN y régimen configurados.")
+                    .size(11.5)
+                    .color(tema::VERDE),
+            );
         }
 
         if !problemas.is_empty() {
