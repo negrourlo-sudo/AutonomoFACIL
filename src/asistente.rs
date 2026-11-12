@@ -208,6 +208,14 @@ pub fn rutina(p: &Perfil) -> Vec<String> {
             "Cada trimestre: revisa compras y ventas. En recargo de equivalencia no presentas 303; el 309 sólo si hay compra a la UE o inversión del sujeto pasivo."
                 .to_string(),
         );
+        // El recargo exime del IVA, no del IRPF: si es persona física, el pago
+        // a cuenta sigue siendo suyo. Una sociedad no lo presenta.
+        if !p.es_sociedad {
+            v.push(
+                "Cada trimestre, además: el pago a cuenta del IRPF, 130 o 131, con las mismas fechas."
+                    .to_string(),
+            );
+        }
     } else {
         // Con SII el 303 es mensual; el 130/131 sigue siendo trimestral y sólo
         // lo presenta la persona física. Una sociedad nunca ve el 130/131.
@@ -282,8 +290,10 @@ pub fn guion(paso: usize, p: &Perfil) -> String {
         _ => {
             let plan = plan(p);
             let modelos: Vec<&str> = plan.obligaciones.iter().map(|o| o.codigo).collect();
-            let trimestral = if p.recargo_equivalencia {
+            let trimestral = if p.recargo_equivalencia && p.es_sociedad {
                 "cada trimestre revisa compras y ventas, sin trescientos tres"
+            } else if p.recargo_equivalencia {
+                "cada trimestre revisa compras y ventas, sin trescientos tres, y presenta el ciento treinta"
             } else if p.sii {
                 "cada mes el trescientos tres, porque estás en el SII"
             } else if p.es_sociedad {
@@ -414,6 +424,22 @@ mod tests {
         assert!(sociedad.contains("Cada mes"), "{sociedad}");
         assert!(!sociedad.contains("130"), "{sociedad}");
         assert!(!sociedad.contains("131"), "{sociedad}");
+    }
+
+    #[test]
+    fn el_recargo_no_quita_el_130_al_autonomo() {
+        let mut p = perfil(Actividad::Comercio);
+        p.recargo_equivalencia = true;
+        let texto = rutina(&p).join(" ");
+        assert!(texto.contains("130 o 131"), "{texto}");
+        assert!(guion(3, &p).contains("ciento treinta"), "{}", guion(3, &p));
+
+        // La sociedad en recargo sigue sin 130/131.
+        p.es_sociedad = true;
+        let texto = rutina(&p).join(" ");
+        assert!(!texto.contains("130"), "{texto}");
+        assert!(!texto.contains("131"), "{texto}");
+        assert!(!guion(3, &p).contains("ciento treinta"));
     }
 
     #[test]

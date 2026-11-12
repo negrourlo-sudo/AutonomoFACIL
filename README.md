@@ -467,8 +467,9 @@ La app no sustituye a un asesor, pero sí deja claro qué toca y cuándo:
 - **Cada trimestre** (hasta el día 20 del mes siguiente): cierra facturas y
 gastos, presenta el **303** y, si eres persona física, el **130/131**. Con **SII**
 el 303 pasa a ser **mensual**, pero el 130/131 sigue trimestral. En recargo de
-equivalencia no hay 303: sólo el 309 si compras a la UE o hay inversión del
-sujeto pasivo. Las **sociedades** no presentan 130/131.
+equivalencia no hay 303 (sólo el 309 si compras a la UE o hay inversión del
+sujeto pasivo), pero el **130/131 sigue** si eres persona física. Las
+**sociedades** no presentan 130/131.
 - **Enero**: 4T y resumen anual de IVA (**390**, si no estás en SII ni
 exonerado); **190** y **180** antes del 31 si tienes nóminas o alquiler con
 retención.
