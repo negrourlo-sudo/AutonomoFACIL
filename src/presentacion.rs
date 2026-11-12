@@ -229,9 +229,99 @@ const GUIA_202: Guia = Guia {
     aviso: "Hay que presentarlo tres veces al año aunque no haya beneficio (a cero). Si el 200 sale a devolver, se compensa en la liquidación anual.",
 };
 
+const GUIA_100: Guia = Guia {
+    codigo: "100",
+    sede: SEDE,
+    identificacion: &[
+        "Certificado electrónico o DNIe",
+        "Cl@ve Móvil o Cl@ve PIN",
+    ],
+    pasos: &[
+        "Reúne ingresos, gastos, retenciones y los pagos del 130 ya hechos en el año.",
+        "Entra en Renta WEB con certificado o Cl@ve y abre el borrador.",
+        "Revisa importes, situación personal y deducciones; no des por bueno el borrador sin mirarlo.",
+        "Comprueba que las retenciones y los 130 cuadran con tus cuentas.",
+        "Presenta y guarda el justificante; si sale a pagar, puedes domiciliarlo.",
+    ],
+    fichero: "No se presenta por fichero propio: se usa Renta WEB o la app de la AEAT.",
+    aviso: "Campaña de abril a junio. Se presenta aunque no salga a pagar. Las sociedades no usan el 100: van con el 200.",
+};
+
+const GUIA_111: Guia = Guia {
+    codigo: "111",
+    sede: SEDE,
+    identificacion: &[
+        "Certificado electrónico o DNIe",
+        "Cl@ve Móvil o Cl@ve PIN (personas físicas)",
+    ],
+    pasos: &[
+        "Calcula las retenciones de las nóminas y de los profesionales del trimestre.",
+        "En la Sede elige «Modelo 111. Retenciones e ingresos a cuenta del IRPF».",
+        "Identifícate y abre «Nueva declaración».",
+        "Teclea número de perceptores, base de las retenciones y cuota retenida.",
+        "Presenta y guarda el justificante; el 190 resume el año.",
+    ],
+    fichero: "Admite fichero con el diseño de registro oficial, cómodo si hay muchos empleados; el formulario sirve para pocos.",
+    aviso: "Plazo: 1–20 del mes siguiente a cada trimestre. Si no hay nóminas ni retenciones, no se presenta.",
+};
+
+const GUIA_115: Guia = Guia {
+    codigo: "115",
+    sede: SEDE,
+    identificacion: &[
+        "Certificado electrónico o DNIe",
+        "Cl@ve Móvil o Cl@ve PIN (personas físicas)",
+    ],
+    pasos: &[
+        "Sólo si pagas alquiler de un local a un arrendador español y le retienes el 19 %.",
+        "En la Sede elige «Modelo 115. Retenciones por rendimientos de inmuebles urbanos».",
+        "Identifícate y abre «Nueva declaración».",
+        "Teclea el número de inmuebles, la base y la retención del trimestre.",
+        "Presenta y guarda el justificante; el 180 resume el año.",
+    ],
+    fichero: "Formulario web; también admite fichero con el diseño de registro.",
+    aviso: "Plazo: 1–20 del mes siguiente a cada trimestre. Si el arrendador es extranjero sin establecimiento, el 115 no aplica igual: consúltalo.",
+};
+
+const GUIA_190: Guia = Guia {
+    codigo: "190",
+    sede: SEDE,
+    identificacion: &[
+        "Certificado electrónico o DNIe",
+        "Cl@ve Móvil o Cl@ve PIN (personas físicas)",
+    ],
+    pasos: &[
+        "Reúne los cuatro 111 del año: perceptores, bases y retenciones.",
+        "En la Sede elige «Modelo 190. Resumen anual de retenciones».",
+        "Identifícate y abre «Nueva declaración»; puedes importar los 111 si los tienes en fichero.",
+        "Comprueba que los totales cuadran con la suma de los 111 presentados.",
+        "Presenta y guarda el justificante antes del 31 de enero.",
+    ],
+    fichero: "Admite fichero TGVI con el diseño de registro anual.",
+    aviso: "Sólo si has presentado el 111. Un error aquí descuadra las rentas de tus empleados: revisa NIF y bases uno a uno.",
+};
+
+const GUIA_180: Guia = Guia {
+    codigo: "180",
+    sede: SEDE,
+    identificacion: &[
+        "Certificado electrónico o DNIe",
+        "Cl@ve Móvil o Cl@ve PIN (personas físicas)",
+    ],
+    pasos: &[
+        "Reúne los cuatro 115 del año: arrendadores, bases y retenciones.",
+        "En la Sede elige «Modelo 180. Resumen anual de retenciones por inmuebles».",
+        "Identifícate y abre «Nueva declaración».",
+        "Comprueba que los totales cuadran con los 115 presentados.",
+        "Presenta y guarda el justificante antes del 31 de enero.",
+    ],
+    fichero: "Admite fichero TGVI con el diseño de registro anual.",
+    aviso: "Sólo si has presentado el 115. El arrendador declara ese alquiler como ingreso: los importes deben coincidir.",
+};
+
 const GUIAS: &[&Guia] = &[
     &GUIA_303, &GUIA_130, &GUIA_390, &GUIA_347, &GUIA_349, &GUIA_131, &GUIA_309, &GUIA_369,
-    &GUIA_035, &GUIA_200, &GUIA_202,
+    &GUIA_035, &GUIA_200, &GUIA_202, &GUIA_100, &GUIA_111, &GUIA_115, &GUIA_190, &GUIA_180,
 ];
 
 pub fn guia(codigo: &str) -> Option<&'static Guia> {
@@ -261,7 +351,7 @@ pub const AUTOMATICO: &[(&str, &str)] = &[
 /// Enlace oficial con el diseño de registro de cada modelo.
 pub fn diseno_registro(codigo: &str) -> Option<&'static str> {
     match codigo {
-        "390" | "347" | "349" | "369" | "200" | "202" => Some(
+        "390" | "347" | "349" | "369" | "200" | "202" | "111" | "115" | "190" | "180" => Some(
             "https://sede.agenciatributaria.gob.es/Sede/ayuda/consultas-informaticas/presentacion-declaraciones-ayuda-tecnica.html",
         ),
         _ => None,
@@ -273,14 +363,23 @@ mod tests {
     use super::*;
 
     #[test]
-    fn los_modelos_que_se_rellenan_tienen_guia() {
+    fn todos_los_modelos_listados_tienen_guia() {
+        // Los que la app calcula exigen pasos completos.
         for codigo in ["303", "130", "390", "347", "349"] {
             let g = guia(codigo).unwrap_or_else(|| panic!("falta la guía del {codigo}"));
             assert!(g.sede.starts_with("https://sede.agenciatributaria.gob.es/"));
             assert!(g.pasos.len() >= 5, "el {codigo} necesita pasos de verdad");
             assert!(!g.fichero.is_empty());
         }
-        assert!(guia("111").is_none());
+        // Los que sólo se guían (sin cálculo) también tienen su ficha.
+        for codigo in [
+            "100", "111", "115", "180", "190", "200", "202", "369", "035",
+        ] {
+            let g = guia(codigo).unwrap_or_else(|| panic!("falta la guía del {codigo}"));
+            assert!(g.sede.starts_with("https://sede.agenciatributaria.gob.es/"));
+            assert!(g.pasos.len() >= 4, "el {codigo} necesita pasos de verdad");
+            assert!(!g.fichero.is_empty());
+        }
     }
 
     #[test]

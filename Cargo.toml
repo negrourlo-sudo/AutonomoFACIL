@@ -1,6 +1,6 @@
 [package]
 name = "autonomofacil"
-version = "0.6.11"
+version = "0.6.12"
 edition = "2021"
 description = "Presupuestos y facturas para España: Verifactu y FacturaE 3.2.2"
 

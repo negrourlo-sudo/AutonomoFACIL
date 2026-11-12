@@ -180,6 +180,14 @@ pub fn plan(p: &Perfil) -> Plan {
         "Guarda todas las facturas de gasto con tu NIF: sin factura no hay IVA deducible ni gasto que reste en el 130."
             .to_string(),
     );
+    consejos.push(
+        "Numera las facturas sin saltos y por series. Una factura emitida no se borra: se corrige con una rectificativa."
+            .to_string(),
+    );
+    consejos.push(
+        "Separa la cuenta del negocio de la personal y guarda facturas, justificantes y extractos cuatro años: Hacienda puede pedirlos."
+            .to_string(),
+    );
 
     Plan {
         iva_pb,
@@ -189,6 +197,65 @@ pub fn plan(p: &Perfil) -> Plan {
         resumen,
         consejos,
     }
+}
+
+/// Rutina práctica del año, con lo que hay que hacer y cuándo.
+/// Se adapta a régimen, sociedad y tipo de clientes.
+pub fn rutina(p: &Perfil) -> Vec<String> {
+    let mut v = Vec::new();
+    if p.recargo_equivalencia {
+        v.push(
+            "Cada trimestre: revisa compras y ventas. En recargo de equivalencia no presentas 303; el 309 sólo si hay compra a la UE o inversión del sujeto pasivo."
+                .to_string(),
+        );
+    } else {
+        // Con SII el 303 es mensual; el 130/131 sigue siendo trimestral y sólo
+        // lo presenta la persona física. Una sociedad nunca ve el 130/131.
+        v.push(if p.sii {
+            "Cada mes: cierra facturas y gastos y presenta el 303 antes del día 20; con SII los libros van en cuatro días."
+                .to_string()
+        } else {
+            "Cada trimestre: cierra facturas y gastos y presenta el 303 antes del día 20 del mes siguiente."
+                .to_string()
+        });
+        if !p.es_sociedad {
+            v.push(
+                "Cada trimestre, además: el pago a cuenta del IRPF, 130 o 131, con las mismas fechas que el 303."
+                    .to_string(),
+            );
+        }
+    }
+    if p.es_sociedad {
+        v.push("Abril, octubre y diciembre: pago fraccionado del 200 con el 202.".to_string());
+        v.push("Julio: Impuesto de Sociedades (200) del ejercicio cerrado.".to_string());
+    } else {
+        v.push("Abril a junio: Renta (100); las retenciones y los 130 ya pagados se restan.".to_string());
+    }
+    v.push(
+        "Enero: 4T y resumen anual del IVA (390, si no estás en SII ni exonerado); 190 y 180 antes del 31 si tienes nóminas o alquiler con retención."
+            .to_string(),
+    );
+    v.push(
+        "Febrero: 347 si con un mismo cliente o proveedor superaste 3.005,06 € con IVA en el año."
+            .to_string(),
+    );
+    if p.a_ue || p.a_isp {
+        v.push(
+            "Cada trimestre (o cada mes si superas 50.000 €): 349 con las operaciones intracomunitarias."
+                .to_string(),
+        );
+    }
+    if matches!(p.actividad, Actividad::Digital | Actividad::Comercio) {
+        v.push(
+            "Si vendes a particulares de la UE por encima de 10.000 € al año: 369 trimestral (mensual si es IOSS), con alta previa en el 035."
+                .to_string(),
+        );
+    }
+    v.push(
+        "Siempre: numeración sin saltos, rectificativa para corregir y justificantes guardados cuatro años."
+            .to_string(),
+    );
+    v
 }
 
 /// Texto que lee la voz en cada paso del asistente. Se escribe para el oído:
@@ -215,10 +282,25 @@ pub fn guion(paso: usize, p: &Perfil) -> String {
         _ => {
             let plan = plan(p);
             let modelos: Vec<&str> = plan.obligaciones.iter().map(|o| o.codigo).collect();
+            let trimestral = if p.recargo_equivalencia {
+                "cada trimestre revisa compras y ventas, sin trescientos tres"
+            } else if p.sii {
+                "cada mes el trescientos tres, porque estás en el SII"
+            } else if p.es_sociedad {
+                "cada trimestre el trescientos tres"
+            } else {
+                "cada trimestre el trescientos tres y el ciento treinta"
+            };
+            let anual = if p.es_sociedad {
+                "en abril, octubre y diciembre el doscientos dos, y en julio el doscientos"
+            } else {
+                "en primavera la Renta"
+            };
             format!(
                 "Este es tu plan. {} Tendrás que presentar los modelos {}. \
-                 Te dejo los consejos en pantalla, y puedes cambiar todo esto en Ajustes \
-                 o repetir el asistente cuando quieras.",
+                 La rutina es sencilla: {trimestral}; en enero el resumen anual; {anual}. \
+                 Guarda cada justificante. Te dejo los consejos en pantalla, y puedes cambiar \
+                 todo esto en Ajustes o repetir el asistente cuando quieras.",
                 plan.resumen.join(" "),
                 modelos.join(", ")
             )
@@ -298,6 +380,54 @@ mod tests {
         assert!(cierre.contains("Este es tu plan"), "{cierre}");
         assert!(cierre.contains("303"), "{cierre}");
         assert!(!guion(3, &p).contains("·"), "sin listas para el oído");
+    }
+
+    #[test]
+    fn la_rutina_cambia_entre_autonomo_y_sociedad() {
+        let mut p = perfil(Actividad::Servicios);
+        let autonomo = rutina(&p).join(" ");
+        assert!(autonomo.contains("303"), "{autonomo}");
+        assert!(autonomo.contains("130"), "{autonomo}");
+        assert!(autonomo.contains("Renta"), "{autonomo}");
+        p.es_sociedad = true;
+        let sociedad = rutina(&p).join(" ");
+        assert!(sociedad.contains("200"), "{sociedad}");
+        assert!(sociedad.contains("202"), "{sociedad}");
+        assert!(!sociedad.contains("Renta (100)"), "{sociedad}");
+        // Una sociedad no presenta el pago a cuenta del IRPF.
+        assert!(!sociedad.contains("130"), "{sociedad}");
+        assert!(!sociedad.contains("131"), "{sociedad}");
+    }
+
+    #[test]
+    fn con_sii_el_303_es_mensual_y_el_130_sigue_trimestral() {
+        let mut p = perfil(Actividad::Servicios);
+        p.sii = true;
+        let autonomo = rutina(&p).join(" ");
+        assert!(autonomo.contains("Cada mes"), "{autonomo}");
+        assert!(!autonomo.contains("Cada trimestre: cierra"), "{autonomo}");
+        assert!(autonomo.contains("130 o 131"), "{autonomo}");
+
+        // Y con SII, una sociedad sigue sin ver el 130/131.
+        p.es_sociedad = true;
+        let sociedad = rutina(&p).join(" ");
+        assert!(sociedad.contains("Cada mes"), "{sociedad}");
+        assert!(!sociedad.contains("130"), "{sociedad}");
+        assert!(!sociedad.contains("131"), "{sociedad}");
+    }
+
+    #[test]
+    fn la_voz_de_la_sociedad_no_nombra_el_130() {
+        let mut p = perfil(Actividad::Servicios);
+        p.es_sociedad = true;
+        let voz = guion(3, &p);
+        assert!(voz.contains("doscientos"), "{voz}");
+        assert!(!voz.contains("ciento treinta"), "{voz}");
+
+        p.sii = true;
+        let voz = guion(3, &p);
+        assert!(voz.contains("cada mes"), "{voz}");
+        assert!(!voz.contains("ciento treinta"), "{voz}");
     }
 
     #[test]

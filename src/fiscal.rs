@@ -598,6 +598,27 @@ mod tests {
     }
 
     #[test]
+    fn todas_las_obligaciones_tienen_ficha_de_presentacion() {
+        let mut soc = Empresa::default();
+        soc.persona_fisica = false;
+        let mut recargo = Empresa::default();
+        recargo.recargo_equivalencia = true;
+        let mut casos: Vec<Obligacion> = Vec::new();
+        for act in Actividad::TODAS {
+            casos.extend(obligaciones(act));
+            casos.extend(obligaciones_con(act, &soc));
+            casos.extend(obligaciones_con(act, &recargo));
+        }
+        for o in casos {
+            assert!(
+                crate::presentacion::guia(o.codigo).is_some(),
+                "falta la ficha de presentación del modelo {}",
+                o.codigo
+            );
+        }
+    }
+
+    #[test]
     fn una_sociedad_cambia_irpf_por_sociedades() {
         let mut e = Empresa::default();
         e.persona_fisica = false;

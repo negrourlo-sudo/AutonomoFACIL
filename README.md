@@ -460,6 +460,31 @@ El 349 es exclusivo de operaciones con la UE: una plataforma de EE. UU. nunca
 entra en él. El 303 se presenta igual, aunque esas ventas no lleven IVA, porque
 ese mismo 303 es el que te deja deducir el IVA de tus gastos.
 
+## Rutina del año
+
+La app no sustituye a un asesor, pero sí deja claro qué toca y cuándo:
+
+- **Cada trimestre** (hasta el día 20 del mes siguiente): cierra facturas y
+gastos, presenta el **303** y, si eres persona física, el **130/131**. Con **SII**
+el 303 pasa a ser **mensual**, pero el 130/131 sigue trimestral. En recargo de
+equivalencia no hay 303: sólo el 309 si compras a la UE o hay inversión del
+sujeto pasivo. Las **sociedades** no presentan 130/131.
+- **Enero**: 4T y resumen anual de IVA (**390**, si no estás en SII ni
+exonerado); **190** y **180** antes del 31 si tienes nóminas o alquiler con
+retención.
+- **Febrero**: **347** si con un mismo cliente o proveedor superaste 3.005,06 €
+con IVA en el año.
+- **Abril–junio**: Renta (**100**); las retenciones y los 130 pagados se restan.
+- **Sociedades**: **202** en abril, octubre y diciembre; **200** en julio.
+- **Venta digital a particulares de la UE**: **369** trimestral por encima de
+10.000 € al año (mensual en IOSS), con alta previa en el **035**.
+- **Siempre**: numeración sin saltos, rectificativa para corregir (nunca borrar
+una emitida) y facturas, justificantes y extractos guardados cuatro años.
+
+Cada modelo listado en la guía tiene su ficha de presentación con enlace a la
+Sede, pasos, si admite fichero y el aviso que más se atasca; hay un test que
+falla si se añade un modelo sin ficha.
+
 ## Modelos rellenados (0.4.0)
 
 En la guía, cada modelo que la app sabe calcular (**303, 130, 390, 347 y

@@ -607,6 +607,17 @@ impl Asistente {
         for c in &plan.consejos {
             ui.label(RichText::new(format!("· {c}")).size(11.5).color(tema::SUAVE));
         }
+        ui.add_space(12.0);
+        ui.label(
+            RichText::new("Tu rutina, en orden")
+                .size(13.0)
+                .strong()
+                .color(tema::TEXTO),
+        );
+        ui.add_space(4.0);
+        for r in crate::asistente::rutina(&self.perfil()) {
+            ui.label(RichText::new(format!("· {r}")).size(11.5).color(tema::SUAVE));
+        }
         ui.add_space(10.0);
         ui.label(
             RichText::new(
