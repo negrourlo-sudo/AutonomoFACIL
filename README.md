@@ -1,10 +1,14 @@
 # AutónomoFACIL
 
 Aplicación de escritorio en Rust para hacer **presupuestos y facturas** en España,
-con registro **Verifactu** encadenado y exportación **FacturaE 3.2.2**.
+con registro **Verifactu** encadenado, exportación **FacturaE 3.2.2** y un
+módulo de **empleados y nóminas** para autónomos con trabajadores y sociedades.
 
 Sin Electron, sin WebView, sin Node y sin toolchain de C: una ventana nativa
 (egui/eframe) y un ejecutable.
+
+Versión actual: **0.7.2**. La corrección de una factura emitida se hace con una
+**R1 por diferencias**; no se borra ni se anula la original.
 
 ---
 
@@ -13,13 +17,14 @@ Sin Electron, sin WebView, sin Node y sin toolchain de C: una ventana nativa
 | Pieza | Estado en este programa |
 |---|---|
 | Registro de facturación con huella SHA-256 encadenada | **Implementado** (`src/verifactu.rs`) |
-| QR obligatorio en la factura | **Implementado** (PDF y pantalla) |
+| QR tributario de cotejo en la factura | **Implementado** (PDF y pantalla); **no verificable** |
 | FacturaE 3.2.2 | **Implementado** (`src/facturae.rs`) |
+| Facturas rectificativas R1 encadenadas | **Implementado** (por diferencias) |
 | Envío de registros a la AEAT (modalidad VERI\*FACTU) | **No implementado** |
 | Firma XAdES del FacturaE | **No implementado** |
 | Validación contra el XSD oficial | **No hecha** (ver *Límites*) |
 
-### Plazos vigentes (a 10 de noviembre de 2026)
+### Plazos vigentes (a 12 de noviembre de 2026)
 
 Esto cambia, compruébalo antes de fiarte:
 
@@ -46,23 +51,160 @@ actúa como productor certificado.
 
 ## Cómo funciona el encadenamiento
 
-Cada factura emitida produce un registro cuya huella es:
+Cada factura emitida produce un registro de alta cuya huella es:
 
 ```
 SHA-256(
   "IDEmisorFactura=<NIF>&NumSerieFactura=<serie+número>&FechaExpedicionFactura=<dd-mm-yyyy>"
-  "&TipoFactura=<F1|F2>&CuotaTotal=<x.xx>&ImporteTotal=<x.xx>"
+  "&TipoFactura=<F1|F2|R1>&CuotaTotal=<x.xx>&ImporteTotal=<x.xx>"
   "&Huella=<huella del registro anterior>&FechaHoraHusoGenRegistro=<ISO-8601 con huso>"
 )
 ```
 
-En el primer registro `Huella` va vacía. Al arrancar, el programa **recalcula
-toda la cadena** (`verifactu::verificar_cadena`) y avisa si algún registro no
-cuadra con su factura o si el encadenamiento se rompe: si alguien edita el JSON
-a mano, se ve en la pantalla de Inicio.
+La anulación **no reutiliza esos ocho campos**: usa cinco y otros nombres.
 
-Una factura emitida **no se edita**: se anula, y la anulación genera su propio
-registro encadenado con importes a cero. Igual que en la norma.
+```
+SHA-256(
+  "IDEmisorFacturaAnulada=<NIF>&NumSerieFacturaAnulada=<serie+número>"
+  "&FechaExpedicionFacturaAnulada=<dd-mm-yyyy>&Huella=<huella anterior>"
+  "&FechaHoraHusoGenRegistro=<ISO-8601 con huso>"
+)
+```
+
+En el primer registro `Huella` va vacía. `CuotaTotal` incluye IVA y recargo de
+equivalencia; `ImporteTotal` es base + IVA + recargo y **no resta IRPF**. Los
+importes se escriben con punto y dos decimales, la cadena va en UTF-8 y el
+resultado en mayúsculas. Al arrancar, el programa **recalcula toda la cadena**
+(`verifactu::verificar_cadena`) y avisa si una huella, un número, una fecha, un
+tipo, una cuota o un importe no cuadra, si el encadenamiento se rompe, si una
+anulación no tiene su factura anulada o si falta el registro de una factura
+emitida. Los registros guardados con el algoritmo antiguo (sin campo `version`)
+se siguen verificando con su formato para no romper cadenas ya existentes. El
+JSON guarda además un campo local `orden` que desempata dos registros generados
+en el mismo segundo; no forma parte de la huella ni del XML oficial.
+
+Una factura emitida **no se edita**: se corrige con una **rectificativa R1** por
+la diferencia (la original sigue contando y la R1 suma la corrección, positiva o
+negativa), o se anula. La anulación genera su propio registro encadenado con
+importes a cero. Igual que en la norma.
+
+### Facturas rectificativas R1
+
+En la ficha de una factura emitida, «Rectificar R1» abre una ventana donde se
+indica la **diferencia de base** (por ejemplo, `-100,00` para bajar el importe),
+el IVA de esa diferencia y el motivo. La app calcula IVA, recargo e IRPF, crea
+una factura en la serie `R<aaaa>` con una sola línea y la emite con
+`TipoFactura = R1` y `TipoRectificativa = I` (por diferencias). La original no se
+anula ni se borra: queda marcada como rectificada y conserva su registro de
+alta. El PDF de la R1 se titula «FACTURA RECTIFICATIVA» y cita la original y el
+motivo.
+
+El 303, el 347 y el 349 suman la R1 con su signo, así que no hay que excluir la
+factura original. Una R1 no se puede volver a rectificar desde la app; si se
+anula, la original deja de aparecer como rectificada. FacturaE queda desactivado
+para R1 porque el XML correctivo no está implementado.
+
+### Verifactu explicado para usarlo sin sustos
+
+Dentro de la app, el botón **«Cómo funciona Verifactu»** (en Guía rápida,
+Ajustes, el asistente y la ficha de cada factura) abre la explicación completa
+con preguntas rápidas. En resumen:
+
+- **Qué es.** Un registro de facturación que no se puede cambiar sin que se
+  note: cada factura deja una huella SHA-256 encadenada con la anterior. El alta
+  usa ocho campos (NIF, número, fecha, tipo, cuota, importe, huella anterior y
+  fecha/hora); la anulación usa **cinco** (NIF, número y fecha de la factura
+  anulada, huella anterior y fecha/hora), sin tipo, cuota ni importe. Si se
+  altera o se borra una intermedia, la cadena se rompe y la app avisa en Inicio.
+- **Qué hace la app.** Numera, genera el registro de alta, encadena, crea el QR
+  tributario de 34 mm (nivel M, zona de silencio de 2 mm, etiqueta «QR
+  tributario:»), lo imprime una sola vez, al principio de la primera página
+  —antes del contenido, como pide la AEAT— y verifica toda la cadena al
+  arrancar. Al
+  anular, añade un registro N con importes a cero y marca la factura como
+  anulada; no la borra. En el registro, `CuotaTotal` es IVA + recargo de
+  equivalencia e `ImporteTotal` es base + IVA + recargo, **sin restar IRPF**;
+  el TOTAL del recibo sí resta la retención.
+- **Qué no hace.** **No es un sistema VERI\*FACTU ni un SIF certificado y no
+  remite los registros a la AEAT**: la remisión exige certificado cualificado y
+  declaración responsable del fabricante. El QR es de cotejo, **no verificable**
+  (`ValidarQRNoVerifactu`), y no lleva la leyenda «Factura verificable en la sede
+  electrónica de la AEAT». Como no se remite, la Sede puede contestar que no
+  consta. Tampoco firma el FacturaE ni sustituye a tu asesor.
+- **Cómo usarlo.** Actívalo antes de la primera factura; rellena bien el NIF;
+  emite con «Guardar y emitir»; para corregir sin anular, usa «Rectificar R1»;
+  para anular, «Anular». Si la cadena no cuadra, no sigas emitiendo: restaura
+  una copia.
+- **Errores típicos.** Editar una factura emitida, borrarla, activar Verifactu
+  tarde o repetir un número. Ninguno se arregla reescribiendo: se corrige con
+  una R1, se anula dejando el registro N o se restaura la copia anterior.
+- **Plazos.** 1 de enero de 2027 para sociedades y 1 de julio de 2027 para
+  autónomos y resto. El posible aplazamiento a 2028 anunciado en octubre de
+  2026 no está en el BOE a 12 de noviembre de 2026.
+
+---
+
+## Empleados y nóminas
+
+En **Datos → Empleados** está la plantilla. La ficha guarda nombre, NIF, NAF,
+puesto, contacto, fechas de alta y baja, tipo de contrato, salario bruto anual
+e IRPF. Los ficheros de datos antiguos se abren sin tocar nada: si no había
+empleados, los vectores empiezan vacíos.
+
+La pestaña **Nóminas** genera el mes elegido para todos los empleados activos
+con salario. Cada nómina guarda una copia de los datos laborales (nombre, NIF,
+NAF, puesto y contrato), el bruto, la Seguridad Social del trabajador, el IRPF,
+el neto, la Seguridad Social de la empresa y el coste total. Se puede marcar
+como pagada y descargar un **PDF de resumen de nómina**, marcado como borrador y no oficial. La tabla muestra
+además el IRPF retenido del trimestre (para el **111**) y del año (para el
+**190**).
+
+### 111 y 190 desde las nóminas
+
+Desde la propia pestaña **Nóminas** (y también desde **Modelos e impuestos**)
+se pueden preparar los dos modelos:
+
+- **111 del trimestre**: agrupa las nóminas del trimestre por trabajador y
+  calcula las casillas 01–03 (perceptores, percepciones íntegras y retenciones),
+  con un detalle informativo por perceptor.
+- **190 del año**: suma todas las nóminas del ejercicio, cuenta las percepciones
+  (nóminas, no personas) y genera el detalle anual por perceptor con NIF, base y
+  retención.
+
+Cada botón escribe un **PDF borrador** y un **JSON** en
+`export\<empresa>\Modelos\`, con el modelo, el año, el periodo y la empresa en el
+nombre. El PDF lleva las casillas, el resumen y una tabla de detalle; el JSON
+sirve para revisarlo o pasárselo al gestor.
+
+**Límites importantes:** el cálculo usa **sólo las nóminas generadas en
+AutónomoFACIL**. No incluye facturas de profesionales con retención (casillas
+07–09 del 111), retribuciones en especie, regularizaciones, atrasos, dietas ni
+otras rentas. Tampoco presenta nada en la AEAT: son borradores para revisar y
+teclear o importar en la Sede. Antes de presentar, comprueba que cada perceptor
+tiene un NIF válido y que el 190 cuadra con los cuatro 111 del año.
+
+La estimación usa 12 pagas y los tipos generales de 2026:
+
+- Trabajador: contingencias comunes 4,70 %, desempleo 1,55 % indefinido o
+  1,60 % temporal, formación 0,10 % y MEI 0,13 %.
+- Empresa: contingencias comunes 23,60 %, desempleo 5,50 % o 6,70 %, FOGASA
+  0,20 %, formación 0,60 %, MEI 0,67 % y una estimación de AT/EP del 1,50 %.
+
+**Bases mínimas y máximas:** la estimación **no las aplica**. Para 2026, el
+tope máximo de cotización es **5.101,20 €/mes** y la base mínima depende del
+grupo de cotización (por ejemplo, 1.989,30 €/mes para el grupo 1 y
+1.424,40 €/mes para los grupos 4 a 7). La ficha del empleado no pide ese grupo,
+así que no se puede elegir una base mínima correcta sin inventarla. En
+consecuencia, en salarios altos la Seguridad Social calculada puede ser
+superior a la real (falta el tope máximo) y en salarios bajos puede ser inferior
+(falta la base mínima).
+
+El IRPF es el que se indique en la ficha. **No es una nómina oficial**: no
+prorratea altas o bajas a mitad de mes, no aplica bases mínimas ni máximas de
+cotización, no aplica bonificaciones ni tramos personales y no genera el boletín
+de cotización. Sirve para presupuestar el coste de una persona y anticipar las
+retenciones; el recibo y la presentación se revisan con el asesor o con el
+programa de nóminas.
 
 ---
 
@@ -76,12 +218,14 @@ cargo run --release
 ```
 
 Datos en `%APPDATA%\AutonomoFACIL\datos.json` (escritura atómica + `.bak`).
-Exportaciones en `%APPDATA%\AutonomoFACIL\export\`.
+Exportaciones organizadas en `%APPDATA%\AutonomoFACIL\export\<empresa>\`: `Facturas`, `Presupuestos`, `Proformas`, `Nominas`, `Modelos` y `Contabilidad`, con una subcarpeta por cliente o empleado.
 
 Pruebas:
 
 ```bash
 cargo test
+# La prueba de carga masiva está ignorada por defecto:
+cargo test --release genera_carga_masiva -- --ignored --nocapture
 ```
 
 Generar un PDF y un FacturaE de ejemplo sin abrir la ventana:
@@ -118,10 +262,15 @@ winget install --id NSIS.NSIS -e --accept-package-agreements --accept-source-agr
 1. Copia la aplicación a `%LOCALAPPDATA%\Programs\AutonomoFACIL`.
 2. Crea accesos directos en el menú Inicio y en el escritorio, con icono.
 3. Se registra en **Agregar o quitar programas** de Windows (HKCU).
-4. Deja un `Desinstalar.exe` que borra accesos, registro y carpeta.
-5. Muestra la licencia antes de instalar.
+4. Deja un `Desinstalar.exe` que borra accesos, registro y carpeta del programa.
+5. Al desinstalar, muestra una casilla **sin marcar** para borrar también datos, exportaciones, nóminas, copias y la carpeta antigua `Facturacion` si existe.
+6. Muestra la licencia antes de instalar.
 
-**Tus datos no se borran al desinstalar**: quedan en `%APPDATA%\AutonomoFACIL`.
+**Tus datos no se borran por defecto al desinstalar**: quedan en
+`%APPDATA%\AutonomoFACIL`. El desinstalador permite borrarlos de forma opcional
+marcando esa casilla; si se marca, también elimina la carpeta antigua
+`%APPDATA%\Facturacion` y la eliminación es permanente. En una desinstalación
+silenciosa (`/S`) la página no se muestra y los datos se conservan.
 
 ### El arte del asistente
 
@@ -141,7 +290,9 @@ ANSI y rompe los acentos.
 
 - **Firma de código.** Sin certificado, Windows SmartScreen avisa de que el
   editor es desconocido. Se arregla con un certificado EV/OV y `signtool`.
-- **Icono propio.** Ahora mismo el ejecutable usa el icono genérico.
+- **Icono del ejecutable.** El instalador y los accesos directos usan
+  `icono.ico`, pero el `.exe` no lleva un icono incrustado; Windows muestra el
+  genérico. Se arregla con un recurso `.rc` y recompilando.
 - **Actualizaciones.** No hay comprobación de versión ni autoactualización.
 
 ---
@@ -149,10 +300,16 @@ ANSI y rompe los acentos.
 ## Arquitectura
 
 ```
-src/model.rs      Dominio: dinero en céntimos, líneas, totales, numeración
+src/model.rs      Dominio: dinero en céntimos, líneas, totales, numeración, R1
 src/store.rs      Persistencia JSON atómica con copia de seguridad
 src/verifactu.rs  Huella encadenada, QR, verificación de la cadena
 src/facturae.rs   XML FacturaE 3.2.2
+src/contab.rs     Libro, resumen y análisis por cliente
+src/empleados.rs  Empleados, contratos, nóminas y retenciones 111/190
+src/modelos.rs    Cálculos de 303, 130/131, 390, 347 y 349
+src/fiscal.rs     Calendario de obligaciones y plazos
+src/presentacion.rs Guías de presentación de cada modelo
+src/asistente.rs  Asistente de puesta en marcha y consejos
 src/pdf.rs        Generador de PDF propio + QR dibujado en el papel
 src/ui.rs         Interfaz egui: listas, editor, fichas, ajustes
 ```
@@ -182,10 +339,11 @@ Decisiones que conviene conocer:
    está calcado de un documento validado contra `Facturaev3_2_2.xsd`, pero
    conviene validar el XML con `xmllint` u otra herramienta antes de usarlo.
 3. **Sin remisión a la AEAT.** No hay cliente SOAP, ni certificado, ni cola de
-   reintentos, ni registro de eventos.
+   reintentos, ni registro de eventos. Por eso el QR es de cotejo no verificable
+   y no se usa la leyenda de factura verificable.
 4. **Sin series por ejercicio automáticas** más allá del año natural, ni
-   rectificativas (sólo anulación), ni recargo de equivalencia, ni IGIC/Canarias,
-   ni intracomunitarias.
+   IGIC/Canarias. Las rectificativas R1 son por diferencias; no se generan
+   sustitutivas (R1 con `TipoRectificativa = S`).
 5. **Un solo usuario, una sola empresa.** No hay multi-tenant ni control de
    acceso.
 
@@ -196,7 +354,7 @@ Decisiones que conviene conocer:
 - Firma XAdES del XML con certificado del emisor.
 - Validador XSD en los tests (con el esquema oficial versionado).
 - Cliente SOAP de remisión + registro de eventos + política de reintentos.
-- Rectificativas (R1) y facturas recapitulativas.
+- Facturas recapitulativas.
 - Copia de seguridad programada y exportación/importación.
 
 
@@ -250,7 +408,7 @@ completo de la ventana en la Intel HD 2000, no los efectos, así que el perfil n
 cambia los fps. Se mantiene porque en máquinas con OpenGL por software
 (llvmpipe, WARP) el suavizado de bordes y las sombras sí pesan.
 
-## Proformas y contabilidad (0.2.0.0)
+## Proformas y contabilidad
 
 ### Factura proforma
 
@@ -272,12 +430,12 @@ cambia los fps. Se mantiene porque en máquinas con OpenGL por software
 - Calcula **IVA a ingresar** (modelo 303: repercutido − soportado) e **IRPF 130
   estimado** (20 % del rendimiento neto menos las retenciones practicadas).
 - **Libro de ingresos y gastos** exportable a CSV con `;` y BOM UTF-8 en
-  `%APPDATA%\AutonomoFACIL\export\libro-<año>.csv`.
+  `%APPDATA%\AutonomoFACIL\export\<empresa>\Contabilidad\Libro-<año>-<empresa>.csv`.
 - Es una estimación informativa: no sustituye a la asesoría fiscal ni cubre
   compensaciones de trimestres anteriores, bienes de inversión o regímenes
   especiales.
 
-## Cobros, copias y cierre de ejercicio (0.2.1)
+## Cobros, copias y cierre de ejercicio
 
 ### Cobros parciales
 
@@ -301,7 +459,7 @@ cambia los fps. Se mantiene porque en máquinas con OpenGL por software
 
 En **Ajustes → Copias de seguridad**:
 
-- «Crear copia ahora» escribe `datos-AAAAMMDD-HHMMSS.json` en
+- «Crear copia ahora» escribe `datos-<empresa>-AAAAMMDD-HHMMSS.json` en
   `%APPDATA%\AutonomoFACIL\copias`.
 - Se listan las últimas copias con un botón **Restaurar**, que pide
   confirmación y antes guarda una copia automática del estado actual.
@@ -318,7 +476,7 @@ Una factura emitida y no cobrada cuyo vencimiento ya pasó se marca con la
 insignia **Vencida** en las listas y se cuenta en la tarjeta «Vencidas» de
 Inicio.
 
-## Autorrelleno y guía rápida (0.2.2)
+## Autorrelleno y guía rápida
 
 ### Lo que la aplicación rellena por ti
 
@@ -346,10 +504,11 @@ como hechos sin configurar nada.
 - **Qué hay que presentar y cuándo**: los 303 y 130 de cada trimestre, el 390 y
 el 347, con la fecha límite.
 - **«Descargar resumen del año para el gestor»** escribe
-`%APPDATA%\AutonomoFACIL\export\resumen-<año>.txt` con las cifras anuales, las de
-cada trimestre, el 347 y el 349, y lo abre junto a su carpeta.
+`%APPDATA%\AutonomoFACIL\export\<empresa>\Contabilidad\Informe-<año>-<empresa>.txt`
+con las cifras anuales, las de cada trimestre, el 347 y el 349, y lo abre junto
+a su carpeta.
 
-## Actividad, IVA internacional y obligaciones (0.3.0)
+## Actividad, IVA internacional y obligaciones
 
 ### Tu actividad decide lo demás
 
@@ -486,22 +645,22 @@ Cada modelo listado en la guía tiene su ficha de presentación con enlace a la
 Sede, pasos, si admite fichero y el aviso que más se atasca; hay un test que
 falla si se añade un modelo sin ficha.
 
-## Modelos rellenados (0.4.0)
+## Modelos rellenados
 
 En la guía, cada modelo que la app sabe calcular (**303, 130, 390, 347 y
 349**) tiene su botón **«Rellenar modelo»**. Los trimestrales (303, 130, 349)
 llevan además selector de periodo; los anuales (390, 347) se calculan del año
-entero. Genera dos ficheros en `%APPDATA%\AutonomoFACIL\export\` y abre el
-PDF y su carpeta:
+entero. Genera dos ficheros en
+`%APPDATA%\AutonomoFACIL\export\<empresa>\Modelos\` y abre el PDF y su carpeta:
 
-- `Modelo-303-2026-1T.pdf`: las casillas del modelo con los importes ya
-  calculados (devengado por tipo, deducible, resultado). Es un **borrador**
+- `Modelo-303-2026-1T-<empresa>.pdf`: las casillas del modelo con los importes
+  ya calculados (devengado por tipo, deducible, resultado). Es un **borrador**
   para revisar, no un documento oficial de la AEAT.
-- `Modelo-303-2026-1T.json`: las mismas casillas en formato máquina
+- `Modelo-303-2026-1T-<empresa>.json`: las mismas casillas en formato máquina
   (`{"numero":"69","valor":12345,"unidad":"cents"}`), para pegarlas en otro
   programa o pasárselas a un robot.
-- Los anuales se llaman `Modelo-390-2026-anual.pdf` y
-  `Modelo-347-2026-anual.pdf`.
+- Los anuales se llaman `Modelo-390-2026-anual-<empresa>.pdf` y
+  `Modelo-347-2026-anual-<empresa>.pdf`.
 
 Casillas contrastadas con las instrucciones de la AEAT (ejercicio 2026):
 
@@ -543,9 +702,27 @@ dirección incompleta, IBAN, email, años sin facturas o sin gastos, actividad
 en «Otra»… Cuando está todo, lo dice en verde; si no, cada punto con su
 motivo y un botón a Ajustes.
 - La **lista de modelos del año** con su plazo (y aviso en rojo si venció sin
-presentar), casillas para marcar lo presentado, selector de trimestre en los
-trimestrales, botón **«Preparar el modelo»**, la frase de resumen («Sale a
-liquidar…») y atajos para abrir la Sede de la AEAT o ver el paso a paso.
+  presentar), casillas para marcar lo presentado, selector de trimestre en los
+  trimestrales, botón **«Preparar el modelo»**, la frase de resumen («Sale a
+  liquidar…») y atajos para abrir la Sede de la AEAT o ver el paso a paso.
+- Cada tarjeta lleva una línea **«Por qué: …»** calculada con tu perfil, no un
+  texto genérico: explica de dónde sale ese modelo en tu caso.
+
+### Por qué te toca cada modelo
+
+El «por qué» cambia con el tipo de titular y el régimen, y se ve en la tarjeta,
+en el asistente y en Ajustes:
+
+| Si eres… | Lo que verás y por qué |
+|---|---|
+| Autónomo persona física | 130 (o 131 si estás en módulos), Renta 100 y ningún 200/202: tributas por IRPF. |
+| Sociedad | 200 y 202, sin 100 ni 130/131: tributas por el Impuesto de Sociedades. |
+| Recargo de equivalencia | 309 y no 303/390: el IVA lo repercute tu proveedor; el 130/131 sigue si eres persona física. |
+| SII | 303 mensual con casillas 01–12 y sin 390: el resumen anual va dentro del SII. |
+
+El mismo «por qué» aparece al elegir titular y recargo en el asistente, y en
+Ajustes al cambiar los datos: cambiar de autónomo a sociedad no es un detalle,
+cambia la lista entera de modelos.
 
 ## El asistente de puesta en marcha
 
@@ -611,8 +788,9 @@ La aplicación arranca vacía: `Empresa::default()` nace sin nombre y
 `Db::default()` con clientes, documentos y gastos a cero. No hay ninguna
 empresa sembrada, así que el asistente te pregunta lo tuyo desde el principio.
 
-Los datos viven en `%APPDATA%\AutonomoFACIL\datos.json`, y **reinstalar no los
-borra**: es lo que quieres para no perder facturas al actualizar. Si alguna vez
+Los datos viven en `%APPDATA%\AutonomoFACIL\datos.json`; **reinstalar no los
+borra** y desinstalar tampoco los elimina por defecto. Es lo que quieres para no
+perder facturas al actualizar. Si alguna vez
 quieres volver a empezar como el primer día, cierra la aplicación y aparta ese
 fichero (mejor copiarlo antes). Ojo: en el primer arranque se migra una sola vez
 la carpeta antigua `%APPDATA%\Facturacion`, y si allí sigue habiendo un

@@ -1,6 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-//! AutónomoFACIL: presupuestos y facturas para España.
+//! AutónomoFACIL: presupuestos, facturas y nóminas para España.
 //!
 //! · Dinero en céntimos (`i64`), nunca coma flotante.
 //! · Registro Verifactu con huella SHA-256 encadenada y QR de la AEAT.
@@ -8,6 +8,8 @@
 
 mod asistente;
 mod contab;
+mod empleados;
+mod export;
 mod fiscal;
 mod graficas;
 mod logo;
@@ -42,7 +44,7 @@ fn main() -> eframe::Result {
             .with_inner_size([1260.0, 820.0])
             .with_min_inner_size([820.0, 540.0])
             .with_title(format!(
-                "AutónomoFACIL {} — presupuestos y facturas",
+                "AutónomoFACIL {} — presupuestos, facturas y nóminas",
                 version::VERSION
             )),
         ..Default::default()
@@ -79,7 +81,7 @@ fn demo() {
 
     let empresa = Empresa {
         nombre: "Estudio Ñandú S.L.".to_string(),
-        nif: "B12345678".to_string(),
+        nif: "B12345674".to_string(),
         direccion: "Calle Mayor 1".to_string(),
         cp: "28013".to_string(),
         ciudad: "Madrid".to_string(),
@@ -148,7 +150,7 @@ fn demo() {
         println!("  QR          {}", r.qr_url);
     }
 
-    let dir = std::path::PathBuf::from("export");
+    let dir = export::dir_documento(&doc, &empresa);
     if let Err(e) = std::fs::create_dir_all(&dir) {
         eprintln!("No se pudo crear {}: {e}", dir.display());
         return;

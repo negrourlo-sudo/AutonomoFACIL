@@ -25,9 +25,13 @@ QUE NO HACE
 DONDE ESTAN TUS DATOS
 
    %APPDATA%\AutonomoFACIL\datos.json
+   %APPDATA%\AutonomoFACIL\export
+   %APPDATA%\AutonomoFACIL\copias
 
-Desinstalar el programa NO borra ese fichero. Si quieres eliminarlo, hazlo a
-mano: es tu copia de seguridad y tu responsabilidad conservarla.
+Al desinstalar, el asistente pregunta si quieres borrar tambien todos estos
+datos. Por defecto NO se borran: si no marcas la casilla, podras recuperarlos
+si vuelves a instalar. Si la marcas, se eliminaran de forma permanente. Tambien
+se borra la carpeta antigua %APPDATA%\Facturacion si existe.
 
 
 INSTALACION

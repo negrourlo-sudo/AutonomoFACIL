@@ -4,10 +4,11 @@
 //! estado en memoria. La regla de la casa es que **una factura emitida no se
 //! edita**: se anula, porque el registro encadenado ya está generado.
 
+use crate::empleados::*;
 use crate::model::*;
 use crate::perf::{Benchmark, Perfil};
 use crate::store::Db;
-use crate::{facturae, pdf, tema, verifactu};
+use crate::{export, facturae, pdf, tema, verifactu};
 use chrono::{Datelike, Local, NaiveDate};
 // `egui` llega reexportado por eframe: no es una dependencia directa.
 use eframe::egui;
@@ -21,6 +22,7 @@ pub enum Vista {
     Proformas,
     Facturas,
     Clientes,
+    Empleados,
     Articulos,
     Contabilidad,
     Modelos,
@@ -29,6 +31,21 @@ pub enum Vista {
 }
 
 /// Acciones que se difieren hasta que termina el préstamo mutable del editor.
+const MESES_NOMINA: [&str; 12] = [
+    "Enero",
+    "Febrero",
+    "Marzo",
+    "Abril",
+    "Mayo",
+    "Junio",
+    "Julio",
+    "Agosto",
+    "Septiembre",
+    "Octubre",
+    "Noviembre",
+    "Diciembre",
+];
+
 enum Accion {
     Nada,
     GuardarBorrador,
@@ -83,6 +100,41 @@ struct GastoBuf {
     irpf: String,
 }
 
+/// Empleado en edición. Las fechas y los importes se guardan como texto
+/// mientras se teclean, igual que en el resto de fichas.
+struct EmpleadoBuf {
+    empleado: Empleado,
+    alta: String,
+    baja: String,
+    salario: String,
+    irpf: String,
+}
+
+impl EmpleadoBuf {
+    fn desde(empleado: Empleado) -> Self {
+        Self {
+            alta: empleado.fecha_alta.format("%d/%m/%Y").to_string(),
+            baja: empleado
+                .fecha_baja
+                .map(|f| f.format("%d/%m/%Y").to_string())
+                .unwrap_or_default(),
+            salario: fmt_cents(empleado.salario_bruto_anual_cents),
+            irpf: fmt_pb(empleado.irpf_pb),
+            empleado,
+        }
+    }
+
+    fn nuevo(empleado: Empleado) -> Self {
+        Self {
+            alta: empleado.fecha_alta.format("%d/%m/%Y").to_string(),
+            baja: String::new(),
+            salario: String::new(),
+            irpf: fmt_pb(empleado.irpf_pb),
+            empleado,
+        }
+    }
+}
+
 impl GastoBuf {
     fn desde(gasto: Gasto) -> Self {
         Self {
@@ -131,6 +183,16 @@ impl ArticuloBuf {
             art,
         }
     }
+}
+
+/// Datos que se piden para emitir una R1 por diferencias. Los importes van
+/// como texto porque se teclean.
+#[derive(Clone)]
+struct RectificarBuf {
+    original_id: u64,
+    base: String,
+    iva: String,
+    motivo: String,
 }
 
 struct Editor {
@@ -260,10 +322,6 @@ fn parse_fecha(s: &str) -> Option<NaiveDate> {
         .or_else(|| NaiveDate::parse_from_str(t, "%Y-%m-%d").ok())
 }
 
-pub fn dir_export() -> PathBuf {
-    crate::store::dir_base().join("export")
-}
-
 /// Abre un fichero con la aplicación asociada del sistema.
 #[cfg(windows)]
 fn abrir_fichero(ruta: &std::path::Path) {
@@ -361,6 +419,8 @@ struct Asistente {
     empleados: bool,
     alquiler_local: bool,
     verifactu: bool,
+    /// Pide abrir la ayuda de Verifactu desde el asistente.
+    ayuda: bool,
 }
 
 impl Asistente {
@@ -386,6 +446,7 @@ impl Asistente {
             empleados: false,
             alquiler_local: false,
             verifactu: e.verifactu_activo,
+            ayuda: false,
         }
     }
 
@@ -451,14 +512,24 @@ impl Asistente {
             );
         }
         ui.add_space(14.0);
-        ui.label(RichText::new("¿Cómo tributas?")
-            .size(12.0)
-            .color(tema::SUAVE))
-            .on_hover_text("Una sociedad presenta el Impuesto de Sociedades; un autónomo, IRPF con pagos a cuenta 130 o 131.");
+        tema::etiqueta_ayuda(
+            ui,
+            "¿Cómo tributas?",
+            "Una sociedad presenta el Impuesto de Sociedades; un autónomo, IRPF con pagos a cuenta 130 o 131.",
+        );
         ui.horizontal(|ui| {
             ui.selectable_value(&mut self.es_sociedad, false, "Autónomo (persona física)");
             ui.selectable_value(&mut self.es_sociedad, true, "Sociedad (SL, SA, cooperativa)");
         });
+        ui.label(
+            RichText::new(if self.es_sociedad {
+                "Una sociedad tributa por el Impuesto de Sociedades (200/202): no presenta Renta ni 130/131."
+            } else {
+                "Un autónomo tributa por IRPF: presenta la Renta y adelanta el 20 % con el 130 (o el 131 en módulos)."
+            })
+            .size(10.5)
+            .color(tema::TENUE),
+        );
     }
 
     fn paso_actividad(&mut self, ui: &mut egui::Ui) {
@@ -484,10 +555,11 @@ impl Asistente {
                 }
             });
         ui.add_space(12.0);
-        ui.label(RichText::new("Régimen del IRPF")
-            .size(12.0)
-            .color(tema::SUAVE))
-            .on_hover_text("Simplificada es lo normal hasta 600.000 € de facturación. Módulos sólo para actividades y límites concretos. Normal si superas los límites de la simplificada.");
+        tema::etiqueta_ayuda(
+            ui,
+            "Régimen del IRPF",
+            "Simplificada es lo normal hasta 600.000 € de facturación. Módulos sólo para actividades y límites concretos. Normal si superas los límites de la simplificada.",
+        );
         egui::ComboBox::from_id_salt("asis_irpf")
             .selected_text(self.regimen_irpf.etiqueta())
             .width(360.0)
@@ -498,10 +570,15 @@ impl Asistente {
             });
         ui.add_space(12.0);
         ui.horizontal(|ui| {
-            ui.label(RichText::new("Facturación anual prevista")
-                .size(12.0)
-                .color(tema::SUAVE))
-                .on_hover_text("Una estimación basta: sirve para avisarte del 347, del SII y de la ventanilla única.");
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 3.0;
+                ui.label(RichText::new("Facturación anual prevista").size(12.0).color(tema::SUAVE));
+                tema::icono_ayuda(
+                    ui,
+                    "Facturación anual prevista",
+                    "Una estimación basta: sirve para avisarte del 347, del SII y de la ventanilla única.",
+                );
+            });
             ui.add(
                 egui::TextEdit::singleline(&mut self.facturacion)
                     .desired_width(150.0)
@@ -510,12 +587,24 @@ impl Asistente {
             ui.label(RichText::new("EUR").size(11.0).color(tema::TENUE));
         });
         ui.add_space(12.0);
-        ui.checkbox(&mut self.sii, "Estoy obligado al SII (Suministro Inmediato de Información)")
-            .on_hover_text("Obligatorio para grandes empresas, grupos y quien tribute en régimen de consolidación. Con el SII el 303 es mensual.");
-        ui.checkbox(&mut self.empleados, "Tengo empleados o pago nóminas")
-            .on_hover_text("Añade el 111 trimestral y el 190 anual.");
-        ui.checkbox(&mut self.alquiler_local, "Pago alquiler de un local con retención")
-            .on_hover_text("Añade el 115 trimestral y el 180 anual.");
+        tema::checkbox_ayuda(
+            ui,
+            &mut self.sii,
+            "Estoy obligado al SII (Suministro Inmediato de Información)",
+            "Obligatorio para grandes empresas, grupos y quien tribute en régimen de consolidación. Con el SII el 303 es mensual.",
+        );
+        tema::checkbox_ayuda(
+            ui,
+            &mut self.empleados,
+            "Tengo empleados o pago nóminas",
+            "Añade el 111 trimestral y el 190 anual.",
+        );
+        tema::checkbox_ayuda(
+            ui,
+            &mut self.alquiler_local,
+            "Pago alquiler de un local con retención",
+            "Añade el 115 trimestral y el 180 anual.",
+        );
     }
 
     fn paso_clientes(&mut self, ui: &mut egui::Ui) {
@@ -533,18 +622,42 @@ impl Asistente {
             .color(tema::SUAVE),
         );
         ui.add_space(8.0);
-        ui.checkbox(&mut self.a_particulares, "Particulares")
-            .on_hover_text("Factura con IVA y sin retención. Si no dan NIF, sale simplificada.");
-        ui.checkbox(&mut self.a_empresas, "Empresas y sociedades españolas")
-            .on_hover_text("IVA del 21 % (o el reducido que corresponda) y sin retención si no eres profesional.");
-        ui.checkbox(&mut self.a_profesionales, "Autónomos profesionales que me retienen")
-            .on_hover_text("Te retienen el 15 % de IRPF en la factura (7 % los tres primeros años).");
-        ui.checkbox(&mut self.a_minoristas, "Comercios minoristas en recargo de equivalencia")
-            .on_hover_text("Les repercutes IVA + 5,2 % de recargo, que tú ingresas en el 303.");
-        ui.checkbox(&mut self.a_ue, "Empresas de la UE")
-            .on_hover_text("Factura sin IVA con su NIF-IVA validado en VIES; la operación va al 349.");
-        ui.checkbox(&mut self.a_isp, "Clientes con inversión del sujeto pasivo")
-            .on_hover_text("Factura sin IVA con leyenda; el IVA lo declara el cliente.");
+        tema::checkbox_ayuda(
+            ui,
+            &mut self.a_particulares,
+            "Particulares",
+            "Factura con IVA y sin retención. Si no dan NIF, sale simplificada.",
+        );
+        tema::checkbox_ayuda(
+            ui,
+            &mut self.a_empresas,
+            "Empresas y sociedades españolas",
+            "IVA del 21 % (o el reducido que corresponda) y sin retención si no eres profesional.",
+        );
+        tema::checkbox_ayuda(
+            ui,
+            &mut self.a_profesionales,
+            "Autónomos profesionales que me retienen",
+            "Te retienen el 15 % de IRPF en la factura (7 % los tres primeros años).",
+        );
+        tema::checkbox_ayuda(
+            ui,
+            &mut self.a_minoristas,
+            "Comercios minoristas en recargo de equivalencia",
+            "Les repercutes IVA + 5,2 % de recargo, que tú ingresas en el 303.",
+        );
+        tema::checkbox_ayuda(
+            ui,
+            &mut self.a_ue,
+            "Empresas de la UE",
+            "Factura sin IVA con su NIF-IVA validado en VIES; la operación va al 349.",
+        );
+        tema::checkbox_ayuda(
+            ui,
+            &mut self.a_isp,
+            "Clientes con inversión del sujeto pasivo",
+            "Factura sin IVA con leyenda; el IVA lo declara el cliente.",
+        );
         ui.add_space(12.0);
         ui.label(
             RichText::new("Y de tu lado…")
@@ -552,15 +665,34 @@ impl Asistente {
                 .strong()
                 .color(tema::SUAVE),
         );
-        ui.checkbox(
+        tema::checkbox_ayuda(
+            ui,
             &mut self.recargo,
             "Soy comerciante minorista y compro a mayoristas con recargo de equivalencia",
-        )
-        .on_hover_text(
             "Entonces no deduces el IVA de tus compras y no presentas 303 ni 390: sólo el 309 si compras a la UE o hay ISP.",
         );
-        ui.checkbox(&mut self.verifactu, "Quiero el registro Verifactu con QR en cada factura")
-            .on_hover_text("Registro encadenado y QR verificable en la factura. Recomendado: es lo que exige la normativa antifraude.");
+        if self.recargo {
+            ui.label(
+                RichText::new(
+                    "El recargo no te exime del IRPF: si eres persona física, el 130/131 sigue igual.",
+                )
+                .size(10.5)
+                .color(tema::TENUE),
+            );
+        }
+        tema::checkbox_ayuda(
+            ui,
+            &mut self.verifactu,
+            "Quiero el registro Verifactu con QR en cada factura",
+            "Registro local encadenado y QR tributario de cotejo (no verificable). No envía nada a la AEAT: la remisión exige un sistema certificado. Recomendado: deja las facturas preparadas para la normativa antifraude.",
+        );
+        if ui
+            .small_button("¿Cómo funciona Verifactu?")
+            .on_hover_text("Qué se encadena, qué significa el QR y qué no hace la app.")
+            .clicked()
+        {
+            self.ayuda = true;
+        }
     }
 
     fn paso_plan(&mut self, ui: &mut egui::Ui) {
@@ -644,8 +776,13 @@ pub struct App {
     pub seleccion: Option<u64>,
     editor: Option<Editor>,
     ficha_cliente: Option<Cliente>,
+    ficha_empleado: Option<EmpleadoBuf>,
     ficha_articulo: Option<ArticuloBuf>,
     ficha_gasto: Option<GastoBuf>,
+    /// 0 = fichas de empleados, 1 = nóminas.
+    pestana_empleados: u8,
+    nomina_anyo: i32,
+    nomina_mes: u32,
     /// Año y trimestre que se miran en Contabilidad (0 = todo el año).
     anyo: i32,
     trimestre: u32,
@@ -659,7 +796,10 @@ pub struct App {
     /// Copia de seguridad pendiente de confirmar.
     restaurar: Option<PathBuf>,
     anular: Option<(u64, String)>,
+    rectificar: Option<RectificarBuf>,
     ver_xml: Option<(String, String)>,
+    /// Ventana «Cómo funciona Verifactu» abierta.
+    ayuda_verifactu: bool,
     confirmar: Option<String>,
     /// Si hay cambios sin guardar: a dónde se quería ir al aceptar el aviso.
     descartar: Option<Vista>,
@@ -702,8 +842,12 @@ impl App {
             seleccion: None,
             editor: None,
             ficha_cliente: None,
+            ficha_empleado: None,
             ficha_articulo: None,
             ficha_gasto: None,
+            pestana_empleados: 0,
+            nomina_anyo: Local::now().year(),
+            nomina_mes: Local::now().month(),
             anyo: Local::now().year(),
             trimestre: 0,
             zoom_aplicado: false,
@@ -712,7 +856,9 @@ impl App {
             pestana_contab: 0,
             restaurar: None,
             anular: None,
+            rectificar: None,
             ver_xml: None,
+            ayuda_verifactu: false,
             confirmar: None,
             descartar: None,
             bench,
@@ -731,10 +877,8 @@ impl App {
 
     fn ultima_huella(&self) -> String {
         self.db
-            .documentos
-            .iter()
-            .filter_map(|d| d.verifactu.as_ref())
-            .max_by(|a, b| a.fecha_hora_gen.cmp(&b.fecha_hora_gen))
+            .registros()
+            .last()
             .map(|r| r.huella.clone())
             .unwrap_or_default()
     }
@@ -743,6 +887,12 @@ impl App {
     fn emitir(&mut self, id: u64) -> Result<(), String> {
         if !self.db.empresa.completa() {
             return Err("Completa los datos de tu empresa en Ajustes antes de emitir.".into());
+        }
+        if self.db.empresa.verifactu_activo && !nif_valido(&self.db.empresa.nif) {
+            return Err(
+                "El NIF de tu empresa no es válido: la huella y el QR quedarían mal. Corrígelo en Ajustes."
+                    .into(),
+            );
         }
         let (tipo, serie, ya_numerado, cliente_id, lineas) = {
             let d = self.db.documento(id).ok_or("El documento no existe.")?;
@@ -804,6 +954,17 @@ impl App {
     }
 
     fn anular(&mut self, id: u64, motivo: String) -> Result<(), String> {
+        let lleva_registro = self
+            .db
+            .documento(id)
+            .map(|d| d.tipo.es_fiscal() && d.verifactu.is_some())
+            .unwrap_or(false);
+        if lleva_registro && !nif_valido(&self.db.empresa.nif) {
+            return Err(
+                "El NIF de tu empresa no es válido: la huella de la anulación quedaría mal. Corrígelo en Ajustes."
+                    .into(),
+            );
+        }
         let nif = self.db.empresa.nif.clone();
         let huella_previa = self.ultima_huella();
         let registro = {
@@ -814,9 +975,16 @@ impl App {
             if d.numero == 0 {
                 return Err("Un borrador no se anula: se borra.".into());
             }
-            // Presupuestos y proformas no están en la cadena de la AEAT: se
-            // anulan sin generar registro.
-            if d.tipo.es_fiscal() {
+            if d.rectificada_por.is_some() {
+                return Err(
+                    "Esta factura está corregida por una R1. Anula primero la rectificativa y después la original."
+                        .into(),
+                );
+            }
+            // Presupuestos y proformas no están en la cadena de la AEAT. Una
+            // factura emitida antes de activar Verifactu tampoco tiene alta:
+            // no se le inventa una anulación suelta.
+            if d.tipo.es_fiscal() && d.verifactu.is_some() {
                 Some(verifactu::registro_anulacion(d, &nif, &huella_previa))
             } else {
                 None
@@ -826,7 +994,37 @@ impl App {
             d.estado = Estado::Anulado;
             d.motivo_anulacion = motivo;
             if registro.is_some() {
-                d.verifactu = registro;
+                // Se conserva el registro de alta y se añade el de anulación.
+                d.verifactu_anulacion = registro;
+            }
+        }
+        // Si se anula una R1, la original deja de estar corregida por ella.
+        // Si había otra R1 activa (por ejemplo, una por cada tipo de IVA),
+        // el puntero pasa a esa otra en vez de borrarse sin más.
+        if let Some(rid) = self
+            .db
+            .documento(id)
+            .and_then(|d| d.rectifica.as_ref())
+            .map(|r| r.documento_id)
+        {
+            let otra = self
+                .db
+                .documentos
+                .iter()
+                .filter(|x| {
+                    x.id != id
+                        && x.estado != Estado::Anulado
+                        && x.rectifica
+                            .as_ref()
+                            .map(|r| r.documento_id == rid)
+                            .unwrap_or(false)
+                })
+                .map(|x| x.id)
+                .last();
+            if let Some(o) = self.db.documento_mut(rid) {
+                if o.rectificada_por == Some(id) {
+                    o.rectificada_por = otra;
+                }
             }
         }
         self.guardar();
@@ -875,7 +1073,7 @@ impl App {
     /// documento que todavía no se ha guardado.
     fn escribir_pdf(&self, doc: &Documento) -> Result<PathBuf, String> {
         let bytes = pdf::documento(doc, &self.db.empresa);
-        let dir = dir_export();
+        let dir = export::dir_documento(doc, &self.db.empresa);
         std::fs::create_dir_all(&dir).map_err(|e| format!("crear {}: {e}", dir.display()))?;
         let ruta = dir.join(pdf::nombre_fichero(doc));
         std::fs::write(&ruta, bytes).map_err(|e| format!("escribir PDF: {e}"))?;
@@ -898,6 +1096,28 @@ impl App {
         Ok(ruta)
     }
 
+    fn exportar_nomina_pdf(&mut self, id: u64) -> Result<PathBuf, String> {
+        let n = self
+            .db
+            .nominas
+            .iter()
+            .find(|n| n.id == id)
+            .cloned()
+            .ok_or("La nómina no existe.")?;
+        let e = self
+            .db
+            .empleado(n.empleado_id)
+            .cloned()
+            .ok_or("El empleado de esta nómina ya no existe.")?;
+        let bytes = pdf::nomina(&n, &e, &self.db.empresa);
+        let dir = export::dir_nomina(&self.db.empresa, &e);
+        std::fs::create_dir_all(&dir).map_err(|e| format!("crear {}: {e}", dir.display()))?;
+        let ruta = dir.join(export::nombre_nomina(&n, &e));
+        std::fs::write(&ruta, bytes).map_err(|e| format!("escribir PDF: {e}"))?;
+        abrir_pdf_y_carpeta(&ruta);
+        Ok(ruta)
+    }
+
     fn exportar_xml(&mut self, id: u64) -> Result<PathBuf, String> {
         let empresa = self.db.empresa.clone();
         let doc = self
@@ -909,11 +1129,12 @@ impl App {
             return Err("Emite la factura antes de exportar el FacturaE.".into());
         }
         let xml = facturae::generar(&doc, &empresa);
-        let dir = dir_export();
+        let nombre = facturae::nombre_fichero(&doc);
+        let dir = export::dir_documento(&doc, &empresa);
         std::fs::create_dir_all(&dir).map_err(|e| format!("crear {}: {e}", dir.display()))?;
-        let ruta = dir.join(facturae::nombre_fichero(&doc));
+        let ruta = dir.join(&nombre);
         std::fs::write(&ruta, xml.clone()).map_err(|e| format!("escribir XML: {e}"))?;
-        self.ver_xml = Some((facturae::nombre_fichero(&doc), xml));
+        self.ver_xml = Some((nombre, xml));
         Ok(ruta)
     }
 }
@@ -922,18 +1143,14 @@ impl App {
 // Interfaz
 // ---------------------------------------------------------------------------
 
-fn campo(ui: &mut egui::Ui, etiqueta: &str, valor: &mut String) {
-    campo_h(ui, etiqueta, valor, "");
-}
-
-/// Campo con explicación al dejar el ratón quieto encima: la etiqueta y el
-/// propio campo llevan la misma ayuda.
+/// Campo con explicación: la etiqueta lleva un icono «?» y tanto el icono
+/// como el campo muestran la misma tarjeta de ayuda al pasar el ratón.
 fn campo_h(ui: &mut egui::Ui, etiqueta: &str, valor: &mut String, ayuda: &str) {
-    let mut et = ui.label(RichText::new(etiqueta).size(12.0).color(tema::SUAVE));
-    if !ayuda.is_empty() {
-        et = et.on_hover_text(ayuda);
+    if ayuda.is_empty() {
+        ui.label(RichText::new(etiqueta).size(12.0).color(tema::SUAVE));
+    } else {
+        tema::etiqueta_ayuda(ui, etiqueta, ayuda);
     }
-    let _ = et;
     // add_sized fija el tamaño real: dentro de una Grid, desired_width se
     // recortaba y el campo quedaba minúsculo.
     let ancho = (ui.available_width() - 12.0).clamp(220.0, 460.0);
@@ -942,7 +1159,7 @@ fn campo_h(ui: &mut egui::Ui, etiqueta: &str, valor: &mut String, ayuda: &str) {
         egui::TextEdit::singleline(valor).margin(egui::Margin::symmetric(10.0, 7.0)),
     );
     if !ayuda.is_empty() {
-        resp = resp.on_hover_text(ayuda);
+        resp = resp.on_hover_ui(|ui| tema::ayuda_emergente(ui, etiqueta, ayuda));
     }
     let _ = resp;
     ui.end_row();
@@ -1053,6 +1270,7 @@ impl eframe::App for App {
                 tema::grupo_nav(ui, "DATOS");
                 for (v, t) in [
                     (Vista::Clientes, "Clientes"),
+                    (Vista::Empleados, "Empleados"),
                     (Vista::Articulos, "Artículos"),
                     (Vista::Contabilidad, "Contabilidad"),
                     (Vista::Modelos, "Modelos e impuestos"),
@@ -1160,8 +1378,14 @@ impl eframe::App for App {
                         }
                         acciones.push(("pdf", "PDF"));
                         acciones.push(("duplicar", "Duplicar"));
-                        if d.numero > 0 && d.tipo.es_fiscal() {
+                        if d.numero > 0 && d.tipo.es_fiscal() && d.rectifica.is_none() {
                             acciones.push(("xml", "FacturaE"));
+                        }
+                        if matches!(d.estado, Estado::Emitido | Estado::Pagado)
+                            && d.tipo.es_fiscal()
+                            && d.rectifica.is_none()
+                        {
+                            acciones.push(("rectificar", "Rectificar R1"));
                         }
                         if d.tipo != TipoDoc::Factura {
                             acciones.push(("convertir", "Crear factura"));
@@ -1213,6 +1437,7 @@ impl eframe::App for App {
                 Vista::Proformas => self.vista_lista(ui, TipoDoc::Proforma),
                 Vista::Facturas => self.vista_lista(ui, TipoDoc::Factura),
                 Vista::Clientes => self.vista_clientes(ui),
+                Vista::Empleados => self.vista_empleados(ui),
                 Vista::Articulos => self.vista_articulos(ui),
                 Vista::Contabilidad => self.vista_contabilidad(ui),
                 Vista::Ajustes => self.vista_ajustes(ui),
@@ -1221,6 +1446,9 @@ impl eframe::App for App {
 
         if self.anular.is_some() {
             self.ventana_anular(ctx);
+        }
+        if self.rectificar.is_some() {
+            self.ventana_rectificar(ctx);
         }
         if self.cobro.is_some() {
             self.ventana_cobro(ctx);
@@ -1236,6 +1464,9 @@ impl eframe::App for App {
         }
         if self.descartar.is_some() {
             self.ventana_descartar(ctx);
+        }
+        if self.ayuda_verifactu {
+            self.ventana_ayuda_verifactu(ctx);
         }
     }
 }
@@ -1266,7 +1497,7 @@ impl App {
         };
         let t = doc.totales();
         ui.add_space(2.0);
-        ui.label(RichText::new(doc.tipo.nombre()).size(11.5).color(tema::SUAVE));
+        ui.label(RichText::new(doc.etiqueta_tipo()).size(11.5).color(tema::SUAVE));
         ui.label(
             RichText::new(doc.etiqueta_numero())
                 .size(19.0)
@@ -1275,13 +1506,47 @@ impl App {
         );
         ui.add_space(4.0);
         ui.horizontal(|ui| {
-            tema::insignia_estado(ui, doc.estado);
+            if doc.rectificada_por.is_some() && doc.estado != Estado::Anulado {
+                tema::insignia(ui, "Rectificada", tema::AMBAR_CLARO, tema::AMBAR);
+            } else {
+                tema::insignia_estado(ui, doc.estado);
+            }
             ui.label(
                 RichText::new(doc.fecha.format("%d/%m/%Y").to_string())
                     .size(11.5)
                     .color(tema::SUAVE),
             );
         });
+        if let Some(r) = &doc.rectifica {
+            ui.label(
+                RichText::new(format!(
+                    "Rectifica la factura {} del {}.",
+                    if r.etiqueta.is_empty() { &r.num_serie } else { &r.etiqueta },
+                    r.fecha.format("%d/%m/%Y")
+                ))
+                .size(11.0)
+                .color(tema::SUAVE),
+            );
+            if !doc.motivo_rectificacion.trim().is_empty() {
+                ui.label(
+                    RichText::new(format!("Motivo: {}", doc.motivo_rectificacion))
+                        .size(10.5)
+                        .color(tema::TENUE),
+                );
+            }
+        }
+        if let Some(rid) = doc.rectificada_por {
+            if let Some(r1) = self.db.documento(rid) {
+                ui.label(
+                    RichText::new(format!(
+                        "Corregida por la rectificativa {}.",
+                        r1.etiqueta_numero()
+                    ))
+                    .size(11.0)
+                    .color(tema::AMBAR),
+                );
+            }
+        }
         ui.add_space(10.0);
         tema::tarjeta(ui, |ui| {
             ui.set_min_width(ui.available_width());
@@ -1393,6 +1658,22 @@ impl App {
                         }
                         "cobrado" => self.marcar_cobrado(id),
                         "anular" => self.anular = Some((id, String::new())),
+                        "rectificar" => {
+                            if let Some(d) = self.db.documento(id) {
+                                let iva = d
+                                    .totales()
+                                    .bases
+                                    .first()
+                                    .map(|(t, _, _)| *t)
+                                    .unwrap_or(self.db.empresa.iva_defecto);
+                                self.rectificar = Some(RectificarBuf {
+                                    original_id: id,
+                                    base: String::new(),
+                                    iva: fmt_pb(iva),
+                                    motivo: String::new(),
+                                });
+                            }
+                        }
                         _ => {}
                     }
                 }
@@ -1402,11 +1683,26 @@ impl App {
         if let Some(reg) = &doc.verifactu {
             ui.add_space(12.0);
             ui.separator();
-            ui.label(RichText::new("Registro Verifactu").small().strong());
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Registro Verifactu").small().strong());
+                tema::icono_ayuda(
+                    ui,
+                    "Registro Verifactu",
+                    "El alta queda encadenada con la huella anterior. El QR es de cotejo y no remite nada a la AEAT: la app no está conectada a la Sede.",
+                );
+            });
             egui::Grid::new("reg_verifactu").num_columns(2).show(ui, |ui| {
-                ui.label("Tipo");
+                ui.label("Registro");
                 ui.label(&reg.tipo_registro);
                 ui.end_row();
+                ui.label("Factura");
+                ui.label(doc.tipo_factura_aeat());
+                ui.end_row();
+                if doc.es_rectificativa() {
+                    ui.label("Rectifica");
+                    ui.label(reg.facturas_rectificadas.join(", "));
+                    ui.end_row();
+                }
                 ui.label("Nº serie");
                 ui.label(&reg.num_serie);
                 ui.end_row();
@@ -1419,20 +1715,36 @@ impl App {
                 ui.label(RichText::new(format!("{}…", h)).monospace().small());
                 ui.end_row();
             });
-            if let Ok(code) = qrcode::QrCode::new(reg.qr_url.as_bytes()) {
+            ui.label(
+                RichText::new("QR tributario:")
+                    .small()
+                    .strong(),
+            );
+            if let Ok(code) = qrcode::QrCode::with_error_correction_level(
+                reg.qr_url.as_bytes(),
+                qrcode::EcLevel::M,
+            ) {
                 let n = code.width();
                 let colores = code.to_colors();
                 let lado = 128.0;
                 let (rect, _) =
                     ui.allocate_exact_size(egui::vec2(lado, lado), egui::Sense::hover());
                 let painter = ui.painter_at(rect);
-                let m = lado / n as f32;
+                // Fondo blanco y zona de silencio: en tema oscuro un QR negro
+                // sobre el fondo no se podría leer.
+                painter.rect_filled(rect, 0.0, egui::Color32::WHITE);
+                let silencio = 8.0;
+                let m = (lado - 2.0 * silencio) / n as f32;
                 for fy in 0..n {
                     for fx in 0..n {
                         if colores[fy * n + fx] == qrcode::Color::Dark {
                             painter.rect_filled(
                                 egui::Rect::from_min_size(
-                                    rect.min + egui::vec2(fx as f32 * m, fy as f32 * m),
+                                    rect.min
+                                        + egui::vec2(
+                                            silencio + fx as f32 * m,
+                                            silencio + fy as f32 * m,
+                                        ),
                                     egui::vec2(m + 0.4, m + 0.4),
                                 ),
                                 0.0,
@@ -1443,10 +1755,122 @@ impl App {
                 }
             }
             ui.label(
-                RichText::new("Factura verificable en la sede electrónica de la AEAT.")
+                RichText::new("Registro local encadenado · no remitido a la AEAT")
                     .small()
                     .color(egui::Color32::from_gray(110)),
             );
+            ui.label(
+                RichText::new(
+                    "El QR es de cotejo (modo no VERI*FACTU): no envía nada y no acredita por sí solo que la factura esté validada en la Sede. Para remitir haría falta un certificado cualificado y la declaración responsable del productor.",
+                )
+                .size(10.0)
+                .color(tema::TENUE),
+            );
+            if ui
+                .small_button("¿Cómo funciona Verifactu?")
+                .on_hover_text("Qué se encadena, qué significa el QR y qué no hace la app.")
+                .clicked()
+            {
+                self.ayuda_verifactu = true;
+            }
+        }
+        if let Some(reg) = &doc.verifactu_anulacion {
+            ui.add_space(10.0);
+            ui.label(
+                RichText::new("Registro de anulación Verifactu")
+                    .small()
+                    .strong(),
+            );
+            egui::Grid::new("reg_verifactu_anulacion")
+                .num_columns(2)
+                .show(ui, |ui| {
+                    ui.label("Tipo");
+                    ui.label(&reg.tipo_registro);
+                    ui.end_row();
+                    ui.label("Nº serie");
+                    ui.label(&reg.num_serie);
+                    ui.end_row();
+                    ui.label("Encadenamiento");
+                    ui.label(&reg.encadenamiento);
+                    ui.end_row();
+                    ui.label("Huella");
+                    let mut h = reg.huella.clone();
+                    h.truncate(16);
+                    ui.label(RichText::new(format!("{}…", h)).monospace().small());
+                    ui.end_row();
+                });
+            ui.label(
+                RichText::new(
+                    "El alta se conserva; la anulación va encadenada aparte con importes a cero.",
+                )
+                .size(10.0)
+                .color(tema::TENUE),
+            );
+        }
+    }
+
+    /// Ayuda extensa de Verifactu: qué hace la app, qué no hace y cómo usarlo
+    /// sin romper la cadena. Se abre desde Guía rápida, Ajustes, el asistente
+    /// y la ficha de una factura.
+    fn ventana_ayuda_verifactu(&mut self, ctx: &egui::Context) {
+        let mut abierto = true;
+        let mut cerrar = false;
+        egui::Window::new("Cómo funciona Verifactu")
+            .open(&mut abierto)
+            .collapsible(false)
+            .resizable(true)
+            .order(egui::Order::Foreground)
+            .default_width(720.0)
+            .default_height(720.0)
+            .show(ctx, |ui| {
+                ui.label(
+                    RichText::new("Registro encadenado y QR, explicados sin jerga")
+                        .size(12.0)
+                        .color(tema::SUAVE),
+                );
+                ui.add_space(8.0);
+                egui::ScrollArea::vertical()
+                    .max_height(620.0)
+                    .show(ui, |ui| {
+                        for (titulo, texto) in crate::verifactu::AYUDA {
+                            ui.label(
+                                RichText::new(*titulo)
+                                    .size(13.5)
+                                    .strong()
+                                    .color(tema::TEXTO),
+                            );
+                            ui.label(RichText::new(*texto).size(11.5).color(tema::SUAVE));
+                            ui.add_space(10.0);
+                        }
+                        ui.separator();
+                        ui.add_space(6.0);
+                        ui.label(
+                            RichText::new("Preguntas rápidas")
+                                .size(13.5)
+                                .strong()
+                                .color(tema::TEXTO),
+                        );
+                        ui.add_space(4.0);
+                        for (pregunta, respuesta) in crate::verifactu::PREGUNTAS {
+                            ui.label(
+                                RichText::new(format!("¿{pregunta}?"))
+                                    .size(11.5)
+                                    .strong()
+                                    .color(tema::TEXTO),
+                            );
+                            ui.label(
+                                RichText::new(*respuesta).size(11.0).color(tema::SUAVE),
+                            );
+                            ui.add_space(6.0);
+                        }
+                    });
+                ui.add_space(6.0);
+                if ui.button("Entendido").clicked() {
+                    cerrar = true;
+                }
+            });
+        if cerrar || !abierto {
+            self.ayuda_verifactu = false;
         }
     }
 
@@ -1549,6 +1973,10 @@ impl App {
         nuevo.numero = 0;
         nuevo.estado = Estado::Borrador;
         nuevo.verifactu = None;
+        nuevo.verifactu_anulacion = None;
+        nuevo.rectifica = None;
+        nuevo.motivo_rectificacion.clear();
+        nuevo.rectificada_por = None;
         nuevo.pagos.clear();
         nuevo.fecha = Local::now().date_naive();
         nuevo.vencimiento = nuevo.fecha
@@ -1567,6 +1995,12 @@ impl App {
     /// Diálogo de puesta en marcha: velo oscuro y ventana centrada, con cada
     /// paso y sus campos dentro. Es lo primero que se ve al abrir la app.
     fn ventana_asistente(&mut self, ctx: &egui::Context) {
+        if self.asistente.as_ref().map(|a| a.ayuda).unwrap_or(false) {
+            self.ayuda_verifactu = true;
+            if let Some(a) = self.asistente.as_mut() {
+                a.ayuda = false;
+            }
+        }
         let pantalla = ctx.screen_rect();
         egui::Area::new(egui::Id::new("velo_asistente"))
             // El velo va en Middle: tapa los paneles y campos del fondo, pero
@@ -1844,14 +2278,19 @@ impl App {
         let problemas = verifactu::verificar_cadena(&self.db.documentos);
 
         ui.add_space(4.0);
-        tema::titulo(ui, "Inicio", "Tu negocio de un vistazo");
+        tema::titulo_ayuda(
+            ui,
+            "Inicio",
+            "Tu negocio de un vistazo",
+            "Aquí se resume lo que tienes emitido, pendiente de cobro, vencido y lo que la cadena Verifactu detecta. Pasa el ratón por las tarjetas para ver cómo se calcula cada cifra.",
+        );
         ui.add_space(12.0);
 
         ui.horizontal_wrapped(|ui| {
             tema::kpi(ui, "Facturas emitidas", &emitidas.to_string(), tema::TEXTO);
             tema::kpi(ui, "Pendiente de cobro", &fmt_cents_eur(pendiente), tema::AMBAR);
             tema::kpi(ui, "Presupuestos", &presupuestos.to_string(), tema::TEXTO);
-            tema::kpi(
+            tema::kpi_ayuda(
                 ui,
                 "Cadena Verifactu",
                 if problemas.is_empty() {
@@ -1864,8 +2303,9 @@ impl App {
                 } else {
                     tema::ROJO
                 },
+                "Comprueba que cada registro enlaza con el anterior, que las huellas coinciden y que no falta ninguna factura posterior. Es una revisión local: no envía nada a la AEAT.",
             );
-            tema::kpi(
+            tema::kpi_ayuda(
                 ui,
                 "Vencidas",
                 &vencidas.to_string(),
@@ -1874,6 +2314,7 @@ impl App {
                 } else {
                     tema::VERDE
                 },
+                "Facturas emitidas o pendientes de cobro cuya fecha de vencimiento ya pasó. No cambia el estado fiscal: sólo te avisa para reclamar el cobro.",
             );
         });
 
@@ -1966,17 +2407,19 @@ impl App {
                 },
             );
             tema::kpi(ui, "Pendiente de cobro", &fmt_cents_eur(pendiente), tema::AMBAR);
-            tema::kpi(
+            tema::kpi_ayuda(
                 ui,
                 "IVA a ingresar",
                 &fmt_cents_eur(r.iva_a_ingresar()),
                 tema::ACENTO,
+                "IVA repercutido menos IVA soportado del periodo. No incluye compensaciones de trimestres anteriores ni regímenes especiales: contrástalo antes de presentar el 303.",
             );
-            tema::kpi(
+            tema::kpi_ayuda(
                 ui,
                 "IRPF 130 estimado",
                 &fmt_cents_eur(r.irpf_130()),
                 tema::ACENTO,
+                "Estimación del 20 % del rendimiento neto menos retenciones. El 130 real resta además los pagos fraccionados de trimestres anteriores.",
             );
         });
 
@@ -2021,20 +2464,34 @@ impl App {
         }
 
         ui.horizontal(|ui| {
-            let (nombre, sub) = match tipo {
-                TipoDoc::Factura => ("Facturas", "Documentos fiscales con registro Verifactu"),
-                TipoDoc::Presupuesto => {
-                    ("Presupuestos", "Ofertas para el cliente, sin validez fiscal")
-                }
-                TipoDoc::Proforma => ("Proformas", "Cobro anticipado, sin validez fiscal"),
+            let (nombre, sub, ayuda) = match tipo {
+                TipoDoc::Factura => (
+                    "Facturas",
+                    "Documentos fiscales con registro Verifactu",
+                    "Sólo las facturas emitidas llevan número, registro encadenado y QR. Una factura emitida no se edita: se anula o se rectifica con una R1.",
+                ),
+                TipoDoc::Presupuesto => (
+                    "Presupuestos",
+                    "Ofertas para el cliente, sin validez fiscal",
+                    "Un presupuesto no lleva IVA devengado ni número fiscal. Cuando el cliente acepta, se convierte en factura y entonces se numera.",
+                ),
+                TipoDoc::Proforma => (
+                    "Proformas",
+                    "Cobro anticipado, sin validez fiscal",
+                    "Una proforma sirve para cobrar antes de emitir la factura. No cuenta para el 303 ni para Verifactu hasta que se convierte en factura.",
+                ),
             };
             ui.vertical(|ui| {
-                ui.label(
-                    RichText::new(nombre)
-                        .size(24.0)
-                        .strong()
-                        .color(tema::TEXTO),
-                );
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 6.0;
+                    ui.label(
+                        RichText::new(nombre)
+                            .size(24.0)
+                            .strong()
+                            .color(tema::TEXTO),
+                    );
+                    tema::icono_ayuda(ui, nombre, ayuda);
+                });
                 ui.label(RichText::new(sub).size(12.0).color(tema::SUAVE));
             });
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -2121,40 +2578,109 @@ impl App {
         );
         ui.add_space(4.0);
 
-        egui::ScrollArea::vertical().show(ui, |ui| {
+        // Columnas de ancho fijo: la cabecera y las filas se pintan en grids
+        // distintos, así que tienen que medir lo mismo. Con miles de facturas
+        // se dibujan sólo las filas visibles (`show_rows`): antes se pintaban
+        // las 4.000 de golpe y la ventana se quedaba congelada varios segundos.
+        let ancho_num = 95.0;
+        let ancho_fecha = 78.0;
+        let ancho_cliente = 230.0;
+        let ancho_estado = 86.0;
+        let ancho_total = 108.0;
+        let ancho_accion = 54.0;
+        let alto_fila = 24.0;
+
+        egui::Grid::new("lista_docs_cabecera")
+            .num_columns(6)
+            .spacing([10.0, 4.0])
+            .show(ui, |ui| {
+                for (titulo, ancho) in [
+                    ("Número", ancho_num),
+                    ("Fecha", ancho_fecha),
+                    ("Cliente", ancho_cliente),
+                    ("Estado", ancho_estado),
+                    ("Total", ancho_total),
+                    ("", ancho_accion),
+                ] {
+                    ui.add_sized(
+                        [ancho, 20.0],
+                        egui::Label::new(RichText::new(titulo).strong()),
+                    );
+                }
+                ui.end_row();
+            });
+        ui.add_space(2.0);
+
+        egui::ScrollArea::vertical().show_rows(ui, alto_fila, docs.len(), |ui, rango| {
             egui::Grid::new("lista_docs")
                 .num_columns(6)
                 .striped(true)
-                .spacing([14.0, 6.0])
+                .spacing([10.0, 4.0])
                 .show(ui, |ui| {
-                    ui.label(RichText::new("Número").strong());
-                    ui.label(RichText::new("Fecha").strong());
-                    ui.label(RichText::new("Cliente").strong());
-                    ui.label(RichText::new("Estado").strong());
-                    ui.label(RichText::new("Total").strong());
-                    ui.label("");
-                    ui.end_row();
-                    for d in &docs {
+                    for d in &docs[rango] {
                         let sel = self.seleccion == Some(d.id);
-                        if ui.selectable_label(sel, d.etiqueta_numero()).clicked() {
+                        let resp = ui.add_sized(
+                            [ancho_num, 20.0],
+                            egui::SelectableLabel::new(sel, d.etiqueta_numero()),
+                        );
+                        if resp.clicked() {
                             self.seleccion = Some(d.id);
                         }
-                        ui.label(d.fecha.format("%d/%m/%Y").to_string());
-                        ui.label(d.cliente.nombre_completo());
-                        if d.vencida() {
-                            tema::insignia(ui, "Vencida", tema::ROJO_CLARO, tema::ROJO);
-                        } else {
-                            tema::insignia_estado(ui, d.estado);
-                        }
-                        ui.label(RichText::new(fmt_cents_eur(d.totales().total)).monospace());
-                        if d.editable() {
-                            if ui.small_button("editar").clicked() {
-                                self.seleccion = Some(d.id);
-                                self.editor = Some(Editor::desde(d.clone(), false));
-                            }
-                        } else if ui.small_button("ver").clicked() {
-                            self.seleccion = Some(d.id);
-                        }
+                        ui.add_sized(
+                            [ancho_fecha, 20.0],
+                            egui::Label::new(d.fecha.format("%d/%m/%Y").to_string()),
+                        );
+                        ui.add_sized(
+                            [ancho_cliente, 20.0],
+                            egui::Label::new(d.cliente.nombre_completo()).truncate(),
+                        );
+                        ui.allocate_ui_with_layout(
+                            egui::vec2(ancho_estado, 20.0),
+                            egui::Layout::left_to_right(egui::Align::Center),
+                            |ui| {
+                                if d.rectificada_por.is_some()
+                                    && d.estado != Estado::Anulado
+                                {
+                                    tema::insignia(
+                                        ui,
+                                        "Rectificada",
+                                        tema::AMBAR_CLARO,
+                                        tema::AMBAR,
+                                    );
+                                } else if d.rectifica.is_some() {
+                                    tema::insignia(
+                                        ui,
+                                        "R1",
+                                        tema::AMBAR_CLARO,
+                                        tema::AMBAR,
+                                    );
+                                } else if d.vencida() {
+                                    tema::insignia(ui, "Vencida", tema::ROJO_CLARO, tema::ROJO);
+                                } else {
+                                    tema::insignia_estado(ui, d.estado);
+                                }
+                            },
+                        );
+                        ui.add_sized(
+                            [ancho_total, 20.0],
+                            egui::Label::new(
+                                RichText::new(fmt_cents_eur(d.totales().total)).monospace(),
+                            ),
+                        );
+                        ui.allocate_ui_with_layout(
+                            egui::vec2(ancho_accion, 20.0),
+                            egui::Layout::left_to_right(egui::Align::Center),
+                            |ui| {
+                                if d.editable() {
+                                    if ui.small_button("editar").clicked() {
+                                        self.seleccion = Some(d.id);
+                                        self.editor = Some(Editor::desde(d.clone(), false));
+                                    }
+                                } else if ui.small_button("ver").clicked() {
+                                    self.seleccion = Some(d.id);
+                                }
+                            },
+                        );
                         ui.end_row();
                     }
                 });
@@ -2205,13 +2731,21 @@ impl App {
                 .min_col_width(104.0)
                 .spacing([14.0, 10.0])
                 .show(ui, |ui| {
-                    ui.label(RichText::new("Serie").size(12.0).color(tema::SUAVE));
+                    tema::etiqueta_ayuda(
+                        ui,
+                        "Serie",
+                        "Prefijo de la numeración. Cada serie lleva su propia cuenta y debe ser única por ejercicio.",
+                    );
                     ui.add(
                         egui::TextEdit::singleline(&mut editor.serie)
                             .desired_width(124.0)
                             .margin(margen),
                     );
-                    ui.label(RichText::new("Cliente").size(12.0).color(tema::SUAVE));
+                    tema::etiqueta_ayuda(
+                        ui,
+                        "Cliente",
+                        "El cliente se congela al emitir: sus datos quedan guardados como estaban en ese momento.",
+                    );
                     egui::ComboBox::from_id_salt("combo_cliente")
                         .selected_text(
                             clientes
@@ -2228,15 +2762,21 @@ impl App {
                         });
                     ui.end_row();
 
-                    ui.label(RichText::new("Fecha").size(12.0).color(tema::SUAVE))
-                        .on_hover_text("Fecha de expedición: decide el trimestre del 303 y del 130.");
+                    tema::etiqueta_ayuda(
+                        ui,
+                        "Fecha",
+                        "Fecha de expedición: decide el trimestre del 303 y del 130. Usa dd/mm/aaaa.",
+                    );
                     ui.add(
                         egui::TextEdit::singleline(&mut editor.fecha)
                             .desired_width(124.0)
                             .margin(margen),
                     );
-                    ui.label(RichText::new("Vencimiento").size(12.0).color(tema::SUAVE))
-                        .on_hover_text("Cuándo se espera el cobro; no cambia los impuestos.");
+                    tema::etiqueta_ayuda(
+                        ui,
+                        "Vencimiento",
+                        "Cuándo se espera el cobro; no cambia los impuestos ni la fecha de expedición.",
+                    );
                     ui.add(
                         egui::TextEdit::singleline(&mut editor.vencimiento)
                             .desired_width(124.0)
@@ -2244,15 +2784,21 @@ impl App {
                     );
                     ui.end_row();
 
-                    ui.label(RichText::new("IRPF %").size(12.0).color(tema::SUAVE))
-                        .on_hover_text("Retención que te practica el cliente: 15 % (7 % los tres primeros años) si es empresa y eres profesional. 0 % para particulares y clientes de fuera.");
+                    tema::etiqueta_ayuda(
+                        ui,
+                        "IRPF %",
+                        "Retención que te practica el cliente: 15 % (7 % los tres primeros años) si es empresa y eres profesional. 0 % para particulares y clientes de fuera.",
+                    );
                     ui.add(
                         egui::TextEdit::singleline(&mut editor.irpf)
                             .desired_width(124.0)
                             .margin(margen),
                     );
-                    ui.label(RichText::new("Forma de pago").size(12.0).color(tema::SUAVE))
-                        .on_hover_text("Se imprime en la factura y sirve de referencia para el cobro.");
+                    tema::etiqueta_ayuda(
+                        ui,
+                        "Forma de pago",
+                        "Se imprime en la factura y sirve de referencia para el cobro. No cambia los impuestos.",
+                    );
                     ui.add(
                         egui::TextEdit::singleline(&mut editor.doc.forma_pago)
                             .desired_width(320.0)
@@ -2260,8 +2806,11 @@ impl App {
                     );
                     ui.end_row();
 
-                    ui.label(RichText::new("Operación").size(12.0).color(tema::SUAVE))
-                        .on_hover_text("Nacional lleva IVA. UE (intracomunitaria), exportación y exenta van sin IVA, con leyenda, y la UE suma en el 349.");
+                    tema::etiqueta_ayuda(
+                        ui,
+                        "Operación",
+                        "Nacional lleva IVA. UE (intracomunitaria), exportación y exenta van sin IVA, con leyenda, y la UE suma en el 349.",
+                    );
                     egui::ComboBox::from_id_salt("combo_operacion")
                         .selected_text(editor.doc.operacion.etiqueta())
                         .width(320.0)
@@ -2323,7 +2872,14 @@ impl App {
         }
 
         ui.add_space(14.0);
-        ui.label(RichText::new("Líneas").size(15.0).strong().color(tema::TEXTO));
+        ui.horizontal(|ui| {
+            ui.label(RichText::new("Líneas").size(15.0).strong().color(tema::TEXTO));
+            tema::icono_ayuda(
+                ui,
+                "Líneas de la factura",
+                "Cantidad × precio, menos el descuento de la línea, más su IVA. La descripción puede autocompletar precio e IVA si empieza como un artículo guardado.",
+            );
+        });
         ui.add_space(4.0);
 
         // Reparto de anchos: la descripción se lleva lo que sobra, y las
@@ -2505,7 +3061,15 @@ impl App {
                         );
                         ui.end_row();
                     }
-                    ui.label(RichText::new("TOTAL").size(11.5).strong().color(tema::TENUE));
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 3.0;
+                        ui.label(RichText::new("TOTAL").size(11.5).strong().color(tema::TENUE));
+                        tema::icono_ayuda(
+                            ui,
+                            "TOTAL de la factura",
+                            "Base + IVA + recargo − retención de IRPF. Es lo que paga el cliente. En el registro Verifactu, el importe oficial no resta el IRPF.",
+                        );
+                    });
                     ui.label(
                         RichText::new(fmt_cents_eur(totales.total))
                             .size(20.0)
@@ -2712,15 +3276,15 @@ impl App {
             crate::modelos::aplicar(&mut m, aj);
         }
 
-        let dir = dir_export();
+        let empresa = self.db.empresa.clone();
+        let dir = export::dir_modelos(&empresa);
         if let Err(e) = std::fs::create_dir_all(&dir) {
             self.avisar(format!("Crear {}: {e}", dir.display()), true);
             return;
         }
 
-        let empresa = self.db.empresa.clone();
-        let ruta_pdf = dir.join(crate::modelos::nombre(codigo, anyo, tri, "pdf"));
-        let ruta_json = dir.join(crate::modelos::nombre(codigo, anyo, tri, "json"));
+        let ruta_pdf = dir.join(export::nombre_modelo(codigo, anyo, tri, "pdf", &empresa));
+        let ruta_json = dir.join(export::nombre_modelo(codigo, anyo, tri, "json", &empresa));
 
         if let Err(e) = std::fs::write(&ruta_pdf, crate::pdf::modelo(&m, &empresa)) {
             self.avisar(format!("Escribir el PDF: {e}"), true);
@@ -2751,15 +3315,20 @@ impl App {
         }
         let e = self.db.empresa.clone();
 
-        tema::titulo(
+        tema::titulo_ayuda(
             ui,
             "Modelos e impuestos",
             "Qué tienes, qué te falta y el PDF listo para la Sede",
+            "La app calcula una propuesta de cada modelo con tus facturas, gastos y nóminas. Revisa las casillas y los avisos antes de presentarlo: no se envía nada a la AEAT.",
         );
         ui.add_space(12.0);
 
         ui.horizontal(|ui| {
-            ui.label(RichText::new("Ejercicio").size(12.0).color(tema::SUAVE));
+            tema::etiqueta_ayuda(
+                ui,
+                "Ejercicio",
+                "Año fiscal de los modelos. Cámbialo para revisar ejercicios anteriores o preparar el siguiente.",
+            );
             if ui.button("◀").on_hover_text("Año anterior").clicked() {
                 self.anyo = (self.anyo - 1).max(2000);
             }
@@ -2784,12 +3353,19 @@ impl App {
         // Datos con los que se rellena el declarante de cada modelo.
         tema::tarjeta(ui, |ui| {
             ui.set_min_width(ui.available_width());
-            ui.label(
-                RichText::new("Tus datos fiscales")
-                    .size(13.0)
-                    .strong()
-                    .color(tema::TEXTO),
-            );
+            ui.horizontal(|ui| {
+                ui.label(
+                    RichText::new("Tus datos fiscales")
+                        .size(13.0)
+                        .strong()
+                        .color(tema::TEXTO),
+                );
+                tema::icono_ayuda(
+                    ui,
+                    "Tus datos fiscales",
+                    "Estos datos se copian como declarante en cada modelo. Si falta alguno, el PDF sale incompleto y la Sede puede rechazarlo.",
+                );
+            });
             let linea = |ui: &mut egui::Ui, etiqueta: &str, valor: &str| {
                 ui.horizontal(|ui| {
                     ui.label(RichText::new(etiqueta).size(11.0).color(tema::TENUE));
@@ -2857,7 +3433,7 @@ impl App {
             .count();
         if facturas_ano == 0 {
             faltan.push(format!(
-                "No hay facturas emitidas en {}: los modelos saldrán a cero.",
+                "No hay facturas emitidas en {}: los modelos de IVA saldrán a cero (el 111 y el 190 salen de las nóminas).",
                 self.anyo
             ));
         }
@@ -2882,12 +3458,19 @@ impl App {
 
         tema::tarjeta(ui, |ui| {
             ui.set_min_width(ui.available_width());
-            ui.label(
-                RichText::new("Lo que falta")
-                    .size(13.0)
-                    .strong()
-                    .color(tema::TEXTO),
-            );
+            ui.horizontal(|ui| {
+                ui.label(
+                    RichText::new("Lo que falta")
+                        .size(13.0)
+                        .strong()
+                        .color(tema::TEXTO),
+                );
+                tema::icono_ayuda(
+                    ui,
+                    "Lo que falta",
+                    "Son avisos, no errores: el modelo se puede generar igualmente, pero conviene completar estos datos antes de presentarlo.",
+                );
+            });
             if faltan.is_empty() {
                 ui.label(
                     RichText::new(
@@ -2945,13 +3528,33 @@ impl App {
                                 .color(tema::TEXTO),
                         );
                         ui.label(RichText::new(ob.plazo).size(11.0).color(tema::SUAVE));
+                        ui.label(
+                            RichText::new(format!(
+                                "Por qué: {}",
+                                crate::fiscal::motivo(&self.db.empresa, ob.codigo)
+                            ))
+                            .size(10.5)
+                            .italics()
+                            .color(tema::ACENTO),
+                        );
                         if let Some((texto, color)) = plazo_texto(&self.db, &ob, self.anyo, hoy)
                         {
                             ui.label(RichText::new(texto).size(10.5).color(color));
                         }
                     });
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ob.trimestral {
+                        if crate::fiscal::es_mensual(&self.db, &ob) {
+                            // Con SII el 303 se marca mes a mes, no por trimestres.
+                            for m in (1..=12).rev() {
+                                let clave =
+                                    format!("{}-{}-{:02}M", self.anyo, ob.codigo, m);
+                                let mut hecho =
+                                    crate::fiscal::esta_presentado(&self.db, &clave);
+                                if ui.checkbox(&mut hecho, format!("{m:02}")).changed() {
+                                    cambios.push(clave);
+                                }
+                            }
+                        } else if ob.trimestral {
                             for q in (1..=4).rev() {
                                 let clave = format!("{}-{}-{}T", self.anyo, ob.codigo, q);
                                 let mut hecho =
@@ -2973,7 +3576,11 @@ impl App {
                     ui.add_space(4.0);
                     ui.horizontal(|ui| {
                         if crate::modelos::trimestral(ob.codigo) {
-                            ui.label(RichText::new("Periodo").size(11.0).color(tema::SUAVE));
+                            tema::etiqueta_ayuda(
+                                ui,
+                                "Periodo",
+                                "Trimestre que se va a calcular y previsualizar. El modelo se genera con las facturas, gastos y nóminas de ese periodo.",
+                            );
                             for q in 1..=4u32 {
                                 if ui
                                     .selectable_label(self.trimestre == q, format!("{q}T"))
@@ -3163,7 +3770,7 @@ impl App {
         ui.add_space(10.0);
         ui.horizontal(|ui| {
             if ui.button("Abrir la carpeta de exportación").clicked() {
-                let dir = dir_export();
+                let dir = export::raiz_empresa(&self.db.empresa);
                 let _ = std::fs::create_dir_all(&dir);
                 let _ = std::process::Command::new("explorer").arg(&dir).spawn();
             }
@@ -3174,7 +3781,7 @@ impl App {
         ui.add_space(4.0);
         ui.label(
             RichText::new(
-                "Los ficheros se guardan en %APPDATA%\\AutonomoFACIL\\export con el modelo, el año y el trimestre en el nombre.",
+                "Los ficheros se guardan en %APPDATA%\\AutonomoFACIL\\export\\<empresa>\\Modelos, con el modelo, el año, el trimestre y la empresa en el nombre.",
             )
             .size(10.5)
             .color(tema::TENUE),
@@ -3200,11 +3807,70 @@ impl App {
             self.trimestre = crate::contab::trimestre(chrono::Local::now().date_naive());
         }
 
-        tema::titulo(
+        tema::titulo_ayuda(
             ui,
             "Guía rápida",
             "De cero a presentar los impuestos, paso a paso",
+            "Un recorrido recomendado para dejar la app lista y presentar sin sustos. Cada paso se puede abrir por separado; no es una obligación ni sustituye a tu asesor.",
         );
+        ui.add_space(12.0);
+        tema::tarjeta(ui, |ui| {
+            ui.set_min_width(ui.available_width());
+            ui.horizontal(|ui| {
+                ui.vertical(|ui| {
+                    ui.label(
+                        RichText::new("Verifactu, sin sorpresas")
+                            .size(14.0)
+                            .strong()
+                            .color(tema::TEXTO),
+                    );
+                    ui.label(
+                        RichText::new(
+                            "Qué se encadena, qué significa el QR y qué no hace la app. Léelo una vez antes de emitir tu primera factura.",
+                        )
+                        .size(11.0)
+                        .color(tema::SUAVE),
+                    );
+                });
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.button("Cómo funciona").clicked() {
+                        self.ayuda_verifactu = true;
+                    }
+                });
+            });
+        });
+        ui.add_space(12.0);
+
+        let mut ir_empleados = false;
+        tema::tarjeta(ui, |ui| {
+            ui.set_min_width(ui.available_width());
+            ui.horizontal(|ui| {
+                ui.vertical(|ui| {
+                    ui.label(
+                        RichText::new("¿Tienes empleados?")
+                            .size(14.0)
+                            .strong()
+                            .color(tema::TEXTO),
+                    );
+                    ui.label(
+                        RichText::new(
+                            "Fichas, nóminas estimadas, coste de empresa y retenciones para el 111 y el 190. Si trabajas solo, puedes ignorarlo.",
+                        )
+                        .size(11.0)
+                        .color(tema::SUAVE),
+                    );
+                });
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.button("Abrir Empleados").clicked() {
+                        ir_empleados = true;
+                    }
+                });
+            });
+        });
+        if ir_empleados {
+            self.vista = Vista::Empleados;
+            self.ficha_empleado = None;
+        }
         ui.add_space(12.0);
 
         let pasos: [(bool, &str, &str, Vista); 7] = [
@@ -3339,6 +4005,15 @@ impl App {
                         );
                         ui.label(RichText::new(ob.plazo).size(11.5).color(tema::SUAVE));
                         ui.label(RichText::new(ob.detalle).size(11.0).color(tema::TENUE));
+                        ui.label(
+                            RichText::new(format!(
+                                "Por qué: {}",
+                                crate::fiscal::motivo(&self.db.empresa, ob.codigo)
+                            ))
+                            .size(10.5)
+                            .italics()
+                            .color(tema::ACENTO),
+                        );
                         // Plazo automático: el primer periodo del año que
                         // siga sin marcar y su fecha límite.
                         if let Some((texto, color)) =
@@ -3348,7 +4023,18 @@ impl App {
                         }
                     });
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ob.trimestral {
+                        if crate::fiscal::es_mensual(&self.db, &ob) {
+                            // Con SII el 303 se marca mes a mes, no por trimestres.
+                            for m in (1..=12).rev() {
+                                let clave =
+                                    format!("{}-{}-{:02}M", self.anyo, ob.codigo, m);
+                                let mut hecho =
+                                    crate::fiscal::esta_presentado(&self.db, &clave);
+                                if ui.checkbox(&mut hecho, format!("{m:02}")).changed() {
+                                    cambios.push(clave);
+                                }
+                            }
+                        } else if ob.trimestral {
                             for q in (1..=4).rev() {
                                 let clave = format!("{}-{}-{}T", self.anyo, ob.codigo, q);
                                 let mut hecho =
@@ -3370,7 +4056,11 @@ impl App {
                     ui.add_space(4.0);
                     ui.horizontal(|ui| {
                         if crate::modelos::trimestral(ob.codigo) {
-                            ui.label(RichText::new("Periodo").size(11.0).color(tema::SUAVE));
+                            tema::etiqueta_ayuda(
+                                ui,
+                                "Periodo",
+                                "Trimestre que se va a calcular y previsualizar. El modelo se genera con las facturas, gastos y nóminas de ese periodo.",
+                            );
                             for q in 1..=4u32 {
                                 if ui
                                     .selectable_label(self.trimestre == q, format!("{q}T"))
@@ -3541,7 +4231,7 @@ impl App {
                     abrir_url(crate::presentacion::SEDE);
                 }
                 if ui.button("Abrir la carpeta de exportación").clicked() {
-                    let dir = dir_export();
+                    let dir = export::raiz_empresa(&self.db.empresa);
                     let _ = std::fs::create_dir_all(&dir);
                     let _ = std::process::Command::new("explorer").arg(&dir).spawn();
                 }
@@ -3642,9 +4332,590 @@ impl App {
         );
     }
 
+    fn vista_empleados(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            ui.label(
+                RichText::new("Empleados")
+                    .size(24.0)
+                    .strong()
+                    .color(tema::TEXTO),
+            );
+            tema::icono_ayuda(
+                ui,
+                "Empleados",
+                "Fichas laborales y nóminas mensuales. Los cálculos son orientativos: revisa cada recibo y el boletín de cotización con tu asesor.",
+            );
+            ui.add_space(10.0);
+            if ui.button("+ Nuevo empleado").clicked() {
+                let mut e = Empleado::default();
+                e.id = self.db.id();
+                self.ficha_empleado = Some(EmpleadoBuf::nuevo(e));
+                self.pestana_empleados = 0;
+            }
+        });
+        ui.label(
+            RichText::new(
+                "Fichas laborales y nóminas mensuales. Los cálculos son orientativos: revisa el recibo y el boletín de cotización con tu asesor.",
+            )
+            .size(11.5)
+            .color(tema::SUAVE),
+        );
+        ui.add_space(8.0);
+        ui.horizontal(|ui| {
+            if ui
+                .selectable_label(self.pestana_empleados == 0, "Fichas")
+                .clicked()
+            {
+                self.pestana_empleados = 0;
+            }
+            if ui
+                .selectable_label(self.pestana_empleados == 1, "Nóminas")
+                .clicked()
+            {
+                self.pestana_empleados = 1;
+            }
+            tema::icono_ayuda(
+                ui,
+                "Fichas y nóminas",
+                "«Fichas» guarda los datos laborales; «Nóminas» genera los recibos del mes y los resúmenes para el 111 y el 190. Los importes son orientativos.",
+            );
+        });
+        ui.separator();
+        if self.pestana_empleados == 0 {
+            self.vista_empleados_fichas(ui);
+        } else {
+            self.vista_empleados_nominas(ui);
+        }
+    }
+
+    fn vista_empleados_fichas(&mut self, ui: &mut egui::Ui) {
+        ui.columns(2, |cols| {
+            egui::ScrollArea::vertical()
+                .id_salt("lista_empleados")
+                .show(&mut cols[0], |ui| {
+                    if self.db.empleados.is_empty() {
+                        tema::vacio(
+                            ui,
+                            "Sin empleados todavía",
+                            "Pulsa «+ Nuevo empleado» para guardar la primera ficha.",
+                        );
+                    }
+                    let mut abrir: Option<usize> = None;
+                    for (i, e) in self.db.empleados.iter().enumerate() {
+                        let actual = self
+                            .ficha_empleado
+                            .as_ref()
+                            .map(|f| f.empleado.id == e.id)
+                            .unwrap_or(false);
+                        let estado = if e.activo() { "" } else { " · baja" };
+                        let etiqueta = format!(
+                            "{}{} · {}",
+                            e.etiqueta(),
+                            estado,
+                            fmt_cents_eur(e.salario_bruto_anual_cents)
+                        );
+                        if ui.selectable_label(actual, etiqueta).clicked() {
+                            abrir = Some(i);
+                        }
+                    }
+                    if let Some(i) = abrir {
+                        self.ficha_empleado =
+                            Some(EmpleadoBuf::desde(self.db.empleados[i].clone()));
+                    }
+                });
+
+            let mut guardar_datos: Option<Empleado> = None;
+            let mut borrar_id: Option<u64> = None;
+            let mut error: Option<String> = None;
+            if let Some(f) = self.ficha_empleado.as_mut() {
+                let mut guardar = false;
+                let mut borrar = false;
+                egui::ScrollArea::vertical()
+                    .id_salt("ficha_empleado")
+                    .show(&mut cols[1], |ui| {
+                        ui.heading(if f.empleado.nombre.is_empty() {
+                            "Nuevo empleado"
+                        } else {
+                            "Ficha de empleado"
+                        });
+                        egui::Grid::new("form_empleado")
+                            .num_columns(2)
+                            .spacing([10.0, 6.0])
+                            .show(ui, |ui| {
+                                campo_h(
+                                    ui,
+                                    "Nombre",
+                                    &mut f.empleado.nombre,
+                                    "Nombre de la persona que aparece en la nómina.",
+                                );
+                                campo_h(
+                                    ui,
+                                    "Apellidos",
+                                    &mut f.empleado.apellidos,
+                                    "Apellidos de la persona que aparecen en la nómina y en el 190.",
+                                );
+                                campo_h(
+                                    ui,
+                                    "NIF / DNI / NIE",
+                                    &mut f.empleado.nif,
+                                    "Se usa para el 111 y el 190. Se comprueba la letra de control.",
+                                );
+                                if !f.empleado.nif.trim().is_empty()
+                                    && !nif_valido(&f.empleado.nif)
+                                {
+                                    ui.label("");
+                                    ui.label(
+                                        RichText::new(
+                                            "Ese NIF no cuadra con su letra de control. Revísalo antes de presentar el 190.",
+                                        )
+                                        .size(10.5)
+                                        .color(tema::AMBAR),
+                                    );
+                                    ui.end_row();
+                                }
+                                campo_h(
+                                    ui,
+                                    "Nº afiliación SS",
+                                    &mut f.empleado.naf,
+                                    "Número de afiliación (NAF) del trabajador, si lo tienes a mano.",
+                                );
+                                campo_h(
+                                    ui,
+                                    "Puesto",
+                                    &mut f.empleado.puesto,
+                                    "Puesto o categoría profesional. Es informativo: no cambia las cotizaciones.",
+                                );
+                                campo_h(
+                                    ui,
+                                    "Email",
+                                    &mut f.empleado.email,
+                                    "Para enviar la nómina o avisos. No se imprime en el recibo.",
+                                );
+                                campo_h(
+                                    ui,
+                                    "Teléfono",
+                                    &mut f.empleado.telefono,
+                                    "Teléfono de contacto del empleado; opcional.",
+                                );
+                                tema::etiqueta_ayuda(
+                                    ui,
+                                    "Tipo de contrato",
+                                    "Se usa para la ficha laboral. Los tipos de cotización son orientativos y no sustituyen el criterio de tu asesor.",
+                                );
+                                egui::ComboBox::from_id_salt("combo_contrato")
+                                    .selected_text(f.empleado.tipo_contrato.etiqueta())
+                                    .width(220.0)
+                                    .show_ui(ui, |ui| {
+                                        for t in TipoContrato::TODOS {
+                                            ui.selectable_value(
+                                                &mut f.empleado.tipo_contrato,
+                                                t,
+                                                t.etiqueta(),
+                                            );
+                                        }
+                                    });
+                                ui.end_row();
+                                tema::etiqueta_ayuda(
+                                    ui,
+                                    "Fecha de alta",
+                                    "Primer día con alta en la Seguridad Social. Decide en qué nóminas aparece el empleado.",
+                                );
+                                ui.add(
+                                    egui::TextEdit::singleline(&mut f.alta)
+                                        .desired_width(120.0)
+                                        .hint_text("dd/mm/aaaa"),
+                                );
+                                ui.end_row();
+                                tema::etiqueta_ayuda(
+                                    ui,
+                                    "Fecha de baja (opcional)",
+                                    "Último día de alta. Si la dejas vacía, el empleado sigue activo y se incluye en las próximas nóminas.",
+                                );
+                                ui.add(
+                                    egui::TextEdit::singleline(&mut f.baja)
+                                        .desired_width(120.0)
+                                        .hint_text("dd/mm/aaaa"),
+                                );
+                                ui.end_row();
+                                tema::etiqueta_ayuda(
+                                    ui,
+                                    "Salario bruto anual",
+                                    "Salario bruto de 12 pagas antes de cotizaciones y retenciones. La nómina mensual se calcula dividiéndolo entre 12.",
+                                );
+                                ui.add(
+                                    egui::TextEdit::singleline(&mut f.salario)
+                                        .desired_width(120.0)
+                                        .hint_text("24.000,00"),
+                                );
+                                ui.end_row();
+                                tema::etiqueta_ayuda(
+                                    ui,
+                                    "IRPF %",
+                                    "Tipo de retención de IRPF que aplicarás en la nómina. Es orientativo: confirma el porcentaje con tu asesor o con la AEAT.",
+                                );
+                                ui.add(
+                                    egui::TextEdit::singleline(&mut f.irpf)
+                                        .desired_width(90.0)
+                                        .hint_text("15"),
+                                );
+                                ui.end_row();
+                                campo_h(
+                                    ui,
+                                    "Notas",
+                                    &mut f.empleado.notas,
+                                    "Notas internas de la ficha laboral. No salen en la nómina.",
+                                );
+                            });
+                        ui.label(
+                            RichText::new(
+                                "Estimación orientativa: 12 pagas y tipos de 2026. No aplica bases mínimas/máximas ni sustituye el recibo oficial.",
+                            )
+                            .size(10.5)
+                            .color(tema::TENUE),
+                        );
+                        ui.add_space(8.0);
+                        let alta_ok = parse_fecha(&f.alta).is_some();
+                        let baja_ok = f.baja.trim().is_empty() || parse_fecha(&f.baja).is_some();
+                        let salario_ok = parse_cents(&f.salario)
+                            .map(|s| s > 0)
+                            .unwrap_or(false);
+                        let irpf_ok = parse_pb(&f.irpf).is_some();
+                        let valido = !f.empleado.nombre.trim().is_empty()
+                            && alta_ok
+                            && baja_ok
+                            && salario_ok
+                            && irpf_ok;
+                        ui.horizontal(|ui| {
+                            if ui.add_enabled(valido, egui::Button::new("Guardar")).clicked() {
+                                guardar = true;
+                            }
+                            if ui.button("Borrar").clicked() {
+                                borrar = true;
+                            }
+                        });
+                    });
+                if guardar {
+                    let alta = parse_fecha(&f.alta);
+                    let baja = if f.baja.trim().is_empty() {
+                        None
+                    } else {
+                        parse_fecha(&f.baja)
+                    };
+                    let salario = parse_cents(&f.salario);
+                    let irpf = parse_pb(&f.irpf);
+                    if let (Some(alta), Some(salario), Some(irpf)) = (alta, salario, irpf) {
+                        let baja_valida = f.baja.trim().is_empty()
+                            || baja.map(|b| b >= alta).unwrap_or(false);
+                        if salario > 0 && baja_valida {
+                            f.empleado.fecha_alta = alta;
+                            f.empleado.fecha_baja = baja;
+                            f.empleado.salario_bruto_anual_cents = salario;
+                            f.empleado.irpf_pb = irpf;
+                            guardar_datos = Some(f.empleado.clone());
+                        } else if salario <= 0 {
+                            error = Some("El salario bruto anual debe ser mayor que cero.".into());
+                        } else {
+                            error = Some("La fecha de baja no puede ser anterior a la de alta.".into());
+                        }
+                    } else {
+                        error = Some("Revisa las fechas y el salario: usa dd/mm/aaaa y un importe válido.".into());
+                    }
+                }
+                if borrar {
+                    borrar_id = Some(f.empleado.id);
+                }
+            }
+            if let Some(msg) = error {
+                self.avisar(msg, true);
+            }
+            if let Some(e) = guardar_datos {
+                if let Some(existente) = self.db.empleado_mut(e.id) {
+                    *existente = e;
+                } else {
+                    self.db.empleados.push(e);
+                }
+                self.guardar();
+                self.avisar("Empleado guardado.", false);
+                self.ficha_empleado = None;
+            }
+            if let Some(id) = borrar_id {
+                if self.db.nominas.iter().any(|n| n.empleado_id == id) {
+                    self.avisar(
+                        "No se puede borrar: tiene nóminas generadas. Borra antes sus nóminas.",
+                        true,
+                    );
+                } else {
+                    self.db.empleados.retain(|e| e.id != id);
+                    self.guardar();
+                    self.avisar("Empleado borrado.", false);
+                    self.ficha_empleado = None;
+                }
+            }
+        });
+    }
+
+    fn vista_empleados_nominas(&mut self, ui: &mut egui::Ui) {
+        let mut generar_retencion: Option<(&'static str, i32, u32)> = None;
+        ui.horizontal(|ui| {
+            ui.label("Año");
+            let anyo_actual = Local::now().year();
+            egui::ComboBox::from_id_salt("anyo_nomina")
+                .selected_text(self.nomina_anyo.to_string())
+                .width(85.0)
+                .show_ui(ui, |ui| {
+                    for y in (anyo_actual - 5)..=(anyo_actual + 1) {
+                        ui.selectable_value(&mut self.nomina_anyo, y, y.to_string());
+                    }
+                });
+            ui.label("Mes");
+            egui::ComboBox::from_id_salt("mes_nomina")
+                .selected_text(MESES_NOMINA[(self.nomina_mes.saturating_sub(1) as usize).min(11)])
+                .width(120.0)
+                .show_ui(ui, |ui| {
+                    for (i, nombre) in MESES_NOMINA.iter().enumerate() {
+                        ui.selectable_value(&mut self.nomina_mes, i as u32 + 1, *nombre);
+                    }
+                });
+            if ui.button("Generar nóminas del mes").clicked() {
+                match self.generar_nominas_mes() {
+                    Ok((creadas, saltadas)) => {
+                        let mut mensaje = format!("{} nómina(s) generada(s).", creadas);
+                        if saltadas > 0 {
+                            mensaje.push_str(&format!(" {} ya existían.", saltadas));
+                        }
+                        self.avisar(mensaje, false);
+                    }
+                    Err(e) => self.avisar(e, true),
+                }
+            }
+        });
+        ui.add_space(8.0);
+        ui.label(
+            RichText::new(
+                "Estimación de nómina mensual con 12 pagas y los tipos generales de 2026. Revisa cada caso con tu asesor y usa el recibo oficial para presentar.",
+            )
+            .size(11.0)
+            .color(tema::SUAVE),
+        );
+        ui.add_space(6.0);
+        egui::Frame::none()
+            .fill(tema::AMBAR_CLARO)
+            .stroke(egui::Stroke::new(1.0, tema::AMBAR))
+            .rounding(egui::Rounding::same(10.0))
+            .inner_margin(egui::Margin::symmetric(12.0, 9.0))
+            .show(ui, |ui| {
+                ui.label(
+                    RichText::new("⚠ Estimación, no nómina oficial")
+                        .size(12.0)
+                        .strong()
+                        .color(tema::AMBAR),
+                );
+                ui.label(
+                    RichText::new(
+                        "No se aplican las bases mínimas y máximas de cotización. En 2026 el tope máximo es 5.101,20 €/mes y la base mínima depende del grupo de cotización. En salarios altos, la Seguridad Social calculada puede ser superior a la real; en salarios bajos, inferior. Revisa el recibo y el boletín con tu asesor.",
+                    )
+                    .size(11.0)
+                    .color(tema::AMBAR),
+                );
+            });
+        ui.add_space(8.0);
+
+        let trimestre = ((self.nomina_mes.saturating_sub(1)) / 3) + 1;
+        let resumen_trim = crate::empleados::resumen_retenciones(
+            &self.db.nominas,
+            &self.db.empleados,
+            self.nomina_anyo,
+            trimestre,
+        );
+        let resumen_anual = crate::empleados::resumen_retenciones(
+            &self.db.nominas,
+            &self.db.empleados,
+            self.nomina_anyo,
+            0,
+        );
+        tema::tarjeta(ui, |ui| {
+            ui.set_min_width(ui.available_width());
+            ui.label(
+                RichText::new(format!(
+                    "Modelos 111 y 190 · año {} · trimestre {}T",
+                    self.nomina_anyo, trimestre
+                ))
+                .size(13.0)
+                .strong()
+                .color(tema::TEXTO),
+            );
+            ui.label(
+                RichText::new(format!(
+                    "111: {} nóminas, {} perceptores, base {} y retenciones {}. · 190: {} nóminas, {} perceptores, base {} y retenciones {}.",
+                    resumen_trim.num_nominas,
+                    resumen_trim.perceptores.len(),
+                    fmt_cents_eur(resumen_trim.total_bruto_cents),
+                    fmt_cents_eur(resumen_trim.total_irpf_cents),
+                    resumen_anual.num_nominas,
+                    resumen_anual.perceptores.len(),
+                    fmt_cents_eur(resumen_anual.total_bruto_cents),
+                    fmt_cents_eur(resumen_anual.total_irpf_cents)
+                ))
+                .size(11.0)
+                .color(tema::SUAVE),
+            );
+            ui.label(
+                RichText::new(
+                    "Sólo se calculan con las nóminas generadas: no incluyen facturas de profesionales, rentas en especie, regularizaciones ni otros pagos. Revisa los NIF antes de presentar.",
+                )
+                .size(10.5)
+                .color(tema::TENUE),
+            );
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                if ui
+                    .add_enabled(
+                        resumen_trim.num_nominas > 0,
+                        egui::Button::new("Preparar 111 del trimestre"),
+                    )
+                    .on_hover_text("Genera el PDF y el JSON del trimestre. El año y el trimestre salen del selector de arriba.")
+                    .clicked()
+                {
+                    generar_retencion = Some(("111", self.nomina_anyo, trimestre));
+                }
+                if ui
+                    .add_enabled(
+                        resumen_anual.num_nominas > 0,
+                        egui::Button::new("Preparar 190 del año"),
+                    )
+                    .on_hover_text("Genera el PDF y el JSON del resumen anual a partir de estas nóminas.")
+                    .clicked()
+                {
+                    generar_retencion = Some(("190", self.nomina_anyo, 0));
+                }
+            });
+        });
+        ui.add_space(6.0);
+
+        let filas: Vec<Nomina> = self
+            .db
+            .nominas
+            .iter()
+            .filter(|n| n.anyo == self.nomina_anyo && n.mes == self.nomina_mes)
+            .cloned()
+            .collect();
+        if filas.is_empty() {
+            tema::vacio(
+                ui,
+                "Sin nóminas este mes",
+                "Guarda empleados activos y pulsa «Generar nóminas del mes».",
+            );
+        } else {
+            let bruto: i64 = filas.iter().map(|n| n.bruto_cents).sum();
+            let ss_empleado: i64 = filas.iter().map(|n| n.ss_empleado_cents).sum();
+            let irpf: i64 = filas.iter().map(|n| n.irpf_cents).sum();
+            let neto: i64 = filas.iter().map(|n| n.neto_cents).sum();
+            let coste: i64 = filas.iter().map(|n| n.coste_empresa_cents).sum();
+            tema::tarjeta(ui, |ui| {
+                ui.set_min_width(ui.available_width());
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(RichText::new(format!("Bruto {} · SS empleado {} · IRPF {} · Neto {}", fmt_cents_eur(bruto), fmt_cents_eur(ss_empleado), fmt_cents_eur(irpf), fmt_cents_eur(neto))).size(11.5).color(tema::SUAVE));
+                    ui.label(RichText::new(format!("Coste empresa {}", fmt_cents_eur(coste))).size(12.0).strong().color(tema::ACENTO));
+                });
+            });
+            ui.add_space(6.0);
+
+            let mut borrar: Option<u64> = None;
+            let mut pdf_id: Option<u64> = None;
+            let mut pagada: Option<(u64, bool)> = None;
+            // La tabla puede tener muchas nóminas: se limita al alto que queda
+            // libre y se desplaza en vertical. Las acciones (PDF y Borrar)
+            // siguen dentro de cada fila, así que se mueven con ella y no se
+            // quedan fuera de la ventana.
+            let alto_tabla = (ui.available_height() - 6.0).max(180.0);
+            egui::ScrollArea::vertical()
+                .id_salt("tabla_nominas_scroll")
+                .max_height(alto_tabla)
+                .auto_shrink([false, true])
+                .show(ui, |ui| {
+                    egui::Grid::new("tabla_nominas")
+                        .num_columns(8)
+                        .spacing([12.0, 6.0])
+                        .striped(true)
+                        .show(ui, |ui| {
+                            for cabecera in [
+                                "Empleado", "Bruto", "SS empleado", "IRPF", "Neto", "Coste empresa", "Pagada", "Acciones",
+                            ] {
+                                ui.label(RichText::new(cabecera).size(10.5).strong().color(tema::TENUE));
+                            }
+                            ui.end_row();
+                            for n in &filas {
+                                ui.label(&n.empleado_nombre);
+                                ui.label(fmt_cents_eur(n.bruto_cents));
+                                ui.label(fmt_cents_eur(n.ss_empleado_cents));
+                                ui.label(fmt_cents_eur(n.irpf_cents));
+                                ui.label(fmt_cents_eur(n.neto_cents));
+                                ui.label(fmt_cents_eur(n.coste_empresa_cents));
+                                let mut p = n.pagada;
+                                if ui.checkbox(&mut p, "").changed() {
+                                    pagada = Some((n.id, p));
+                                }
+                                ui.horizontal(|ui| {
+                                    if ui.small_button("PDF").clicked() {
+                                        pdf_id = Some(n.id);
+                                    }
+                                    if ui.small_button("Borrar").clicked() {
+                                        borrar = Some(n.id);
+                                    }
+                                });
+                                ui.end_row();
+                            }
+                        });
+                });
+            if let Some((id, p)) = pagada {
+                if let Some(n) = self.db.nominas.iter_mut().find(|n| n.id == id) {
+                    n.pagada = p;
+                }
+                self.guardar();
+            }
+            if let Some(id) = pdf_id {
+                match self.exportar_nomina_pdf(id) {
+                    Ok(p) => self.avisar(format!("Resumen de nómina PDF: {}", p.display()), false),
+                    Err(e) => self.avisar(e, true),
+                }
+            }
+            if let Some(id) = borrar {
+                self.db.nominas.retain(|n| n.id != id);
+                self.guardar();
+                self.avisar("Nómina borrada.", false);
+            }
+        }
+        if let Some((codigo, anyo, tri)) = generar_retencion {
+            self.anyo = anyo;
+            self.trimestre = tri;
+            self.generar_modelo(codigo);
+        }
+    }
+
+    fn generar_nominas_mes(&mut self) -> Result<(usize, usize), String> {
+        let resultado = crate::empleados::generar_nominas_mes(
+            &mut self.db.nominas,
+            &self.db.empleados,
+            &mut self.db.next_id,
+            self.nomina_anyo,
+            self.nomina_mes,
+        );
+        if let Ok((creadas, _)) = &resultado {
+            if *creadas > 0 {
+                self.guardar();
+            }
+        }
+        resultado
+    }
+
     fn vista_clientes(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             ui.heading("Clientes");
+            tema::icono_ayuda(
+                ui,
+                "Clientes",
+                "La ficha del cliente decide el IVA, la retención y el recargo que se proponen al facturar. Sin NIF se emite factura simplificada.",
+            );
             ui.add_space(10.0);
             if ui.button("+ Nuevo cliente").clicked() {
                 let mut c = Cliente::default();
@@ -3721,18 +4992,20 @@ impl App {
                                     );
                                     ui.end_row();
                                 }
-                                ui.label("Tipo");
+                                tema::etiqueta_ayuda(
+                                    ui,
+                                    "Tipo",
+                                    "Marca autónomo o particular. En FacturaE cambia Individual/LegalEntity y también decide si se piden apellidos.",
+                                );
                                 ui.horizontal(|ui| {
-                                    ui.checkbox(&mut f.persona_fisica, "Persona física")
-                                        .on_hover_text(
-                                            "Marca autónomo o particular. En FacturaE cambia Individual/LegalEntity.",
-                                        );
+                                    ui.checkbox(&mut f.persona_fisica, "Persona física");
                                 });
                                 ui.end_row();
-                                ui.label("Régimen fiscal")
-                                    .on_hover_text(
-                                        "Decide el IVA, la retención de IRPF y el recargo que se proponen en cada factura.",
-                                    );
+                                tema::etiqueta_ayuda(
+                                    ui,
+                                    "Régimen fiscal",
+                                    "Decide el IVA, la retención de IRPF y el recargo que se proponen en cada factura.",
+                                );
                                 egui::ComboBox::from_id_salt("combo_regimen_cliente")
                                     .selected_text(f.regimen.etiqueta())
                                     .width(320.0)
@@ -3750,15 +5023,55 @@ impl App {
                                 );
                                 ui.end_row();
                                 if f.persona_fisica {
-                                    campo(ui, "Apellidos", &mut f.apellidos);
+                                    campo_h(
+                                        ui,
+                                        "Apellidos",
+                                        &mut f.apellidos,
+                                        "Apellidos de la persona. Se imprimen después del nombre y FacturaE los pide separados.",
+                                    );
                                 }
-                                campo(ui, "Dirección", &mut f.direccion);
-                                campo(ui, "Código postal", &mut f.cp);
-                                campo(ui, "Ciudad", &mut f.ciudad);
-                                campo(ui, "Provincia", &mut f.provincia);
-                                campo(ui, "Email", &mut f.email);
-                                campo(ui, "Teléfono", &mut f.telefono);
-                                campo(ui, "Notas", &mut f.notas);
+                                campo_h(
+                                    ui,
+                                    "Dirección",
+                                    &mut f.direccion,
+                                    "Calle, número, piso y puerta. Es la dirección que sale impresa en la factura.",
+                                );
+                                campo_h(
+                                    ui,
+                                    "Código postal",
+                                    &mut f.cp,
+                                    "Cinco dígitos. Ayuda a que la factura y el 347 identifiquen bien al cliente.",
+                                );
+                                campo_h(
+                                    ui,
+                                    "Ciudad",
+                                    &mut f.ciudad,
+                                    "Municipio de la dirección de facturación.",
+                                );
+                                campo_h(
+                                    ui,
+                                    "Provincia",
+                                    &mut f.provincia,
+                                    "Provincia de la dirección de facturación.",
+                                );
+                                campo_h(
+                                    ui,
+                                    "Email",
+                                    &mut f.email,
+                                    "Para enviar la factura o el presupuesto. No se imprime si lo dejas vacío.",
+                                );
+                                campo_h(
+                                    ui,
+                                    "Teléfono",
+                                    &mut f.telefono,
+                                    "Teléfono de contacto del cliente; opcional.",
+                                );
+                                campo_h(
+                                    ui,
+                                    "Notas",
+                                    &mut f.notas,
+                                    "Notas internas del cliente. No se imprimen en la factura; para eso usa las notas del documento.",
+                                );
                             });
                         ui.label(
                             RichText::new("Sin NIF se emite factura simplificada (F2/FA).")
@@ -3837,6 +5150,11 @@ impl App {
                     .strong()
                     .color(tema::TEXTO),
             );
+            tema::icono_ayuda(
+                ui,
+                "Artículos",
+                "Un catálogo para no repetir precios. Al escribir una descripción en una factura, se propone el artículo que empiece igual.",
+            );
             ui.add_space(10.0);
             if ui.button("+ Nuevo artículo").clicked() {
                 let mut a = Articulo {
@@ -3892,22 +5210,40 @@ impl App {
                             .num_columns(2)
                             .spacing([10.0, 6.0])
                             .show(ui, |ui| {
-                                campo(ui, "Descripción", &mut f.art.descripcion);
-                                ui.label("Precio unitario");
+                                campo_h(
+                                    ui,
+                                    "Descripción",
+                                    &mut f.art.descripcion,
+                                    "Nombre del producto o servicio. Al escribir las primeras letras en una factura, se propone este artículo.",
+                                );
+                                tema::etiqueta_ayuda(
+                                    ui,
+                                    "Precio unitario",
+                                    "Precio sin IVA. En la factura se multiplica por la cantidad y se le aplica el descuento de la línea.",
+                                );
                                 ui.add(
                                     egui::TextEdit::singleline(&mut f.precio)
                                         .desired_width(120.0)
                                         .hint_text("0,00"),
                                 );
                                 ui.end_row();
-                                ui.label("IVA %");
+                                tema::etiqueta_ayuda(
+                                    ui,
+                                    "IVA %",
+                                    "21 general, 10 reducido, 4 superreducido o 0 exento. Se propone al insertar el artículo, pero puedes cambiarlo en cada línea.",
+                                );
                                 ui.add(
                                     egui::TextEdit::singleline(&mut f.iva)
                                         .desired_width(120.0)
                                         .hint_text("21"),
                                 );
                                 ui.end_row();
-                                campo(ui, "Unidad", &mut f.art.unidad);
+                                campo_h(
+                                    ui,
+                                    "Unidad",
+                                    &mut f.art.unidad,
+                                    "Unidad de medida (ud., hora, kg…). Es informativa; la cantidad de la factura manda.",
+                                );
                             });
                         ui.add_space(8.0);
                         ui.horizontal(|ui| {
@@ -3967,8 +5303,8 @@ impl App {
         self.guardar();
         let dir = self.db.dir_copias();
         std::fs::create_dir_all(&dir).map_err(|e| format!("crear {}: {e}", dir.display()))?;
-        let sello = Local::now().format("%Y%m%d-%H%M%S");
-        let destino = dir.join(format!("datos-{}.json", sello));
+        let sello = Local::now().format("%Y%m%d-%H%M%S").to_string();
+        let destino = dir.join(export::nombre_copia(&self.db.empresa, &sello));
         std::fs::copy(&self.db.ruta, &destino)
             .map_err(|e| format!("copiar a {}: {e}", destino.display()))?;
         Ok(destino)
@@ -3999,6 +5335,7 @@ impl App {
         self.editor = None;
         self.seleccion = None;
         self.ficha_cliente = None;
+        self.ficha_empleado = None;
         self.ficha_articulo = None;
         self.ficha_gasto = None;
         self.cobro = None;
@@ -4085,14 +5422,22 @@ impl App {
                     .num_columns(2)
                     .spacing([12.0, 8.0])
                     .show(ui, |ui| {
-                        ui.label(RichText::new("Fecha").size(12.0).color(tema::SUAVE));
+                        tema::etiqueta_ayuda(
+                            ui,
+                            "Fecha",
+                            "Fecha en la que recibes el cobro. Se guarda en el historial de pagos y decide si la factura pasa a cobrada.",
+                        );
                         ui.add(
                             egui::TextEdit::singleline(&mut fecha)
                                 .desired_width(150.0)
                                 .margin(egui::Margin::symmetric(10.0, 7.0)),
                         );
                         ui.end_row();
-                        ui.label(RichText::new("Importe").size(12.0).color(tema::SUAVE));
+                        tema::etiqueta_ayuda(
+                            ui,
+                            "Importe",
+                            "Cantidad cobrada en este pago. Puede ser parcial: la factura seguirá pendiente hasta cubrir el total.",
+                        );
                         ui.add(
                             egui::TextEdit::singleline(&mut importe)
                                 .desired_width(150.0)
@@ -4136,18 +5481,18 @@ impl App {
 
     fn exportar_informe(&mut self) -> Result<PathBuf, String> {
         let texto = crate::contab::informe_anual(&self.db, self.anyo);
-        let dir = dir_export();
+        let dir = export::dir_contabilidad(&self.db.empresa);
         std::fs::create_dir_all(&dir).map_err(|e| format!("crear {}: {e}", dir.display()))?;
-        let ruta = dir.join(format!("resumen-{}.txt", self.anyo));
+        let ruta = dir.join(export::nombre_informe(self.anyo, &self.db.empresa));
         std::fs::write(&ruta, texto).map_err(|e| format!("escribir resumen: {e}"))?;
         Ok(ruta)
     }
 
     fn exportar_libro(&mut self) -> Result<PathBuf, String> {
         let csv = crate::contab::csv_libro(&self.db, self.anyo);
-        let dir = dir_export();
+        let dir = export::dir_contabilidad(&self.db.empresa);
         std::fs::create_dir_all(&dir).map_err(|e| format!("crear {}: {e}", dir.display()))?;
-        let ruta = dir.join(format!("libro-{}.csv", self.anyo));
+        let ruta = dir.join(export::nombre_libro(self.anyo, &self.db.empresa));
         std::fs::write(&ruta, csv).map_err(|e| format!("escribir CSV: {e}"))?;
         Ok(ruta)
     }
@@ -4411,6 +5756,11 @@ impl App {
                     .strong()
                     .color(tema::TEXTO),
             );
+            tema::icono_ayuda(
+                ui,
+                "Contabilidad",
+                "Resumen de ingresos, gastos, IVA, IRPF y rentabilidad. Todo se calcula con las fechas de los documentos; no sustituye la contabilidad oficial.",
+            );
             ui.add_space(12.0);
             egui::ComboBox::from_id_salt("anyo_contab")
                 .selected_text(self.anyo.to_string())
@@ -4492,6 +5842,11 @@ impl App {
                     self.pestana_contab = i as u8;
                 }
             }
+            tema::icono_ayuda(
+                ui,
+                "Pestañas de contabilidad",
+                "Resumen general, IVA del 303, pago fraccionado del 130, operaciones del 347, calendario y rentabilidad por cliente. Todo es informativo.",
+            );
         });
         ui.add_space(10.0);
 
@@ -4699,6 +6054,11 @@ impl App {
         ui.columns(2, |cols| {
             cols[0].horizontal(|ui| {
                 ui.label(RichText::new("Gastos del periodo").strong());
+                tema::icono_ayuda(
+                    ui,
+                    "Gastos del periodo",
+                    "Facturas de proveedores y gastos afectos a la actividad. El IVA soportado se deduce en el 303 y la base resta en el 130.",
+                );
                 if ui.button("+ Nuevo gasto").clicked() {
                     let mut g = Gasto::default();
                     g.id = self.db.id();
@@ -4799,8 +6159,17 @@ impl App {
                             .num_columns(2)
                             .spacing([10.0, 6.0])
                             .show(ui, |ui| {
-                                campo(ui, "Fecha (dd/mm/aaaa)", &mut f.fecha);
-                                ui.label(RichText::new("Proveedor").size(12.0).color(tema::SUAVE));
+                                campo_h(
+                                    ui,
+                                    "Fecha (dd/mm/aaaa)",
+                                    &mut f.fecha,
+                                    "Fecha de la factura del proveedor. Decide en qué trimestre se deduce el IVA y en qué año cuenta el gasto.",
+                                );
+                                tema::etiqueta_ayuda(
+                                    ui,
+                                    "Proveedor",
+                                    "Nombre o razón social de quien te emite la factura. Puedes reutilizar uno de los ya guardados.",
+                                );
                                 ui.horizontal(|ui| {
                                     ui.add_sized(
                                         [250.0, 30.0],
@@ -4828,7 +6197,12 @@ impl App {
                                     }
                                 });
                                 ui.end_row();
-                                campo(ui, "NIF", &mut f.gasto.nif);
+                                campo_h(
+                                    ui,
+                                    "NIF",
+                                    &mut f.gasto.nif,
+                                    "NIF del proveedor. Se comprueba la letra de control: sin un NIF válido el gasto no se puede deducir ni entra en el 347.",
+                                );
                                 if !f.gasto.nif.trim().is_empty()
                                     && !crate::model::nif_valido(&f.gasto.nif)
                                 {
@@ -4842,8 +6216,17 @@ impl App {
                                     );
                                     ui.end_row();
                                 }
-                                campo(ui, "Concepto", &mut f.gasto.concepto);
-                                ui.label(RichText::new("Categoría").size(12.0).color(tema::SUAVE));
+                                campo_h(
+                                    ui,
+                                    "Concepto",
+                                    &mut f.gasto.concepto,
+                                    "Qué compraste o qué servicio recibiste. Este texto es el que verás en el listado de gastos.",
+                                );
+                                tema::etiqueta_ayuda(
+                                    ui,
+                                    "Categoría",
+                                    "Sirve para agrupar los gastos en el resumen y el informe anual. No cambia la deducción.",
+                                );
                                 ui.horizontal(|ui| {
                                     ui.add_sized(
                                         [250.0, 30.0],
@@ -4861,28 +6244,44 @@ impl App {
                                         });
                                 });
                                 ui.end_row();
-                                ui.label("Base imponible");
+                                tema::etiqueta_ayuda(
+                                    ui,
+                                    "Base imponible",
+                                    "Importe sin IVA ni retención. Es la base que resta en el 130 y sobre la que se calcula la cuota de IVA.",
+                                );
                                 ui.add(
                                     egui::TextEdit::singleline(&mut f.base)
                                         .desired_width(120.0)
                                         .hint_text("0,00"),
                                 );
                                 ui.end_row();
-                                ui.label("IVA %");
+                                tema::etiqueta_ayuda(
+                                    ui,
+                                    "IVA %",
+                                    "IVA soportado de la factura. Se deduce en el 303 si el gasto está afecto a la actividad.",
+                                );
                                 ui.add(
                                     egui::TextEdit::singleline(&mut f.iva)
                                         .desired_width(120.0)
                                         .hint_text("21"),
                                 );
                                 ui.end_row();
-                                ui.label("Retención IRPF %");
+                                tema::etiqueta_ayuda(
+                                    ui,
+                                    "Retención IRPF %",
+                                    "Retención que te practica el proveedor (por ejemplo, un profesional). Se descuenta del total del gasto.",
+                                );
                                 ui.add(
                                     egui::TextEdit::singleline(&mut f.irpf)
                                         .desired_width(120.0)
                                         .hint_text("0"),
                                 );
                                 ui.end_row();
-                                ui.label("Pagado");
+                                tema::etiqueta_ayuda(
+                                    ui,
+                                    "Pagado",
+                                    "Márcalo cuando ya hayas pagado esta factura. No cambia el IVA ni el gasto: sólo el estado de tesorería.",
+                                );
                                 ui.checkbox(&mut f.gasto.pagado, "Ya está pagado");
                                 ui.end_row();
                             });
@@ -5042,6 +6441,11 @@ impl App {
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.label(RichText::new("Logo de la empresa").strong().color(tema::TEXTO));
+                tema::icono_ayuda(
+                    ui,
+                    "Logo de la empresa",
+                    "Se imprime arriba a la izquierda en facturas, presupuestos y proformas. Se convierte a JPEG sobre fondo blanco para que el PDF sea ligero.",
+                );
                     ui.label(RichText::new(nombre).size(11.5).color(tema::SUAVE));
                     if ui.button("Elegir imagen…").clicked() {
                         elegir = true;
@@ -5050,8 +6454,12 @@ impl App {
                         quitar = true;
                     }
                     ui.separator();
-                    ui.checkbox(&mut voz, "Voz en el tutorial")
-                        .on_hover_text("El asistente lee cada paso en voz alta con una voz femenina.");
+                    tema::checkbox_ayuda(
+                        ui,
+                        &mut voz,
+                        "Voz en el tutorial",
+                        "El asistente lee cada paso en voz alta con una voz femenina del sistema. Puedes desactivarlo cuando quieras.",
+                    );
                 });
                 ui.label(
                     RichText::new(
@@ -5151,12 +6559,35 @@ impl App {
     }
 
     fn vista_ajustes(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 6.0;
+            ui.label(
+                RichText::new("Ajustes")
+                    .size(24.0)
+                    .strong()
+                    .color(tema::TEXTO),
+            );
+            tema::icono_ayuda(
+                ui,
+                "Ajustes",
+                "Estos datos son la base de la facturación y de los modelos. Se guardan sólo en tu equipo: la app no los envía a Hacienda.",
+            );
+        });
+        ui.add_space(6.0);
         ui.label(
-            RichText::new("Ajustes")
-                .size(24.0)
-                .strong()
-                .color(tema::TEXTO),
+            RichText::new(
+                "Estos datos deciden qué modelos te tocan y salen impresos en cada factura. Si cambias de autónomo a sociedad, o al contrario, cámbialo aquí: la lista de modelos, el IVA y los plazos se recalculan solos. No se envía nada a Hacienda; es tu copia local.",
+            )
+            .size(11.0)
+            .color(tema::SUAVE),
         );
+        if ui
+            .button("Cómo funciona Verifactu")
+            .on_hover_text("Qué se encadena, qué hace el QR y qué no hace la app.")
+            .clicked()
+        {
+            self.ayuda_verifactu = true;
+        }
         ui.add_space(6.0);
         self.ajustes_logo(ui);
         ui.add_space(6.0);
@@ -5184,8 +6615,17 @@ impl App {
                     &mut e.nif,
                     "Con la letra de control correcta. La vista de modelos lo valida y avisa si no cuadra.",
                 );
-                ui.label("Tipo de titular");
-                ui.checkbox(&mut e.persona_fisica, "Autónomo / persona física");
+                tema::etiqueta_ayuda(
+                    ui,
+                    "Tipo de titular",
+                    "Autónomo o persona física si el NIF es DNI/NIE; sociedad si es CIF. Cambia los modelos y cómo se rellena FacturaE.",
+                );
+                tema::checkbox_ayuda(
+                    ui,
+                    &mut e.persona_fisica,
+                    "Autónomo / persona física",
+                    "Márcalo si tu NIF es DNI o NIE. Si es una sociedad con CIF, déjalo desmarcado para que FacturaE use LegalEntity.",
+                );
                 ui.end_row();
                 if e.persona_fisica {
                     campo_h(
@@ -5230,7 +6670,11 @@ impl App {
                 );
 
                 let mut dias_venc = e.dias_vencimiento.to_string();
-                ui.label("Días de vencimiento");
+                tema::etiqueta_ayuda(
+                    ui,
+                    "Días de vencimiento",
+                    "Días naturales que se suman a la fecha de la factura para proponer el vencimiento. Puedes cambiarlo en cada documento.",
+                );
                 if ui
                     .add(egui::TextEdit::singleline(&mut dias_venc).desired_width(90.0))
                     .changed()
@@ -5247,7 +6691,11 @@ impl App {
                     "Se propone en cada factura nueva; luego se puede cambiar en cada una.",
                 );
 
-                ui.label("Actividad");
+                tema::etiqueta_ayuda(
+                    ui,
+                    "Actividad",
+                    "Decide el IVA y la retención que se proponen por defecto y qué modelos aparecen en la lista. Si no encaja, elige «Otra» y ajústalo a mano.",
+                );
                 let antes = e.actividad;
                 egui::ComboBox::from_id_salt("combo_actividad")
                     .selected_text(e.actividad.etiqueta())
@@ -5264,7 +6712,11 @@ impl App {
                     e.irpf_defecto = e.actividad.retencion_pct() * 100;
                 }
 
-                ui.label("Régimen del IRPF");
+                tema::etiqueta_ayuda(
+                    ui,
+                    "Régimen del IRPF",
+                    "Simplificada es lo habitual hasta 600.000 € de facturación. Módulos y normal tienen requisitos y límites propios.",
+                );
                 egui::ComboBox::from_id_salt("combo_regimen")
                     .selected_text(e.regimen_irpf.etiqueta())
                     .width(320.0)
@@ -5274,15 +6726,23 @@ impl App {
                         }
                     });
                 ui.end_row();
-                ui.label("Regímenes especiales de IVA");
+                tema::etiqueta_ayuda(
+                    ui,
+                    "Regímenes especiales de IVA",
+                    "Recargo de equivalencia y SII cambian qué modelos presentas y con qué periodicidad. Márcalos sólo si te corresponden.",
+                );
                 ui.vertical(|ui| {
-                    ui.checkbox(
+                    tema::checkbox_ayuda(
+                        ui,
                         &mut e.recargo_equivalencia,
                         "Recargo de equivalencia (comercio minorista)",
+                        "Si eres minorista, tus proveedores te repercuten IVA + recargo y tú no deduces el IVA de esas compras. Tampoco presentas 303 ni 390.",
                     );
-                    ui.checkbox(
+                    tema::checkbox_ayuda(
+                        ui,
                         &mut e.sii,
                         "SII: libros en tiempo real, 303 mensual y sin 390",
+                        "El Suministro Inmediato de Información obliga a llevar los libros en tiempo real y cambia el 303 a mensual. Sólo si te corresponde.",
                     );
                     ui.label(
                         RichText::new(
@@ -5296,7 +6756,11 @@ impl App {
 
                 let mut iva = fmt_pb(e.iva_defecto);
                 let mut irpf = fmt_pb(e.irpf_defecto);
-                ui.label("IVA por defecto %");
+                tema::etiqueta_ayuda(
+                    ui,
+                    "IVA por defecto %",
+                    "Tipo que se propone en las líneas nuevas. Puedes cambiarlo en cada factura sin tocar este ajuste.",
+                );
                 if ui
                     .add(egui::TextEdit::singleline(&mut iva).desired_width(90.0))
                     .changed()
@@ -5306,7 +6770,11 @@ impl App {
                     }
                 }
                 ui.end_row();
-                ui.label("IRPF por defecto %");
+                tema::etiqueta_ayuda(
+                    ui,
+                    "IRPF por defecto %",
+                    "Retención que se propone al crear una factura. Para particulares suele ser 0 %; para empresas profesionales, 15 % o 7 % los primeros años.",
+                );
                 if ui
                     .add(egui::TextEdit::singleline(&mut irpf).desired_width(90.0))
                     .changed()
@@ -5322,8 +6790,26 @@ impl App {
                     &mut e.condiciones,
                     "Texto legal que se imprime al pie de la factura.",
                 );
-                ui.label("Verifactu");
-                ui.checkbox(&mut e.verifactu_activo, "Generar registro encadenado y QR");
+                tema::etiqueta_ayuda(
+                    ui,
+                    "Verifactu",
+                    "Genera un registro local encadenado y un QR de cotejo. No remite nada a la AEAT: eso exige un sistema certificado y un certificado cualificado.",
+                );
+                ui.vertical(|ui| {
+                    tema::checkbox_ayuda(
+                        ui,
+                        &mut e.verifactu_activo,
+                        "Generar registro encadenado y QR",
+                        "Activa la huella, el encadenamiento y el QR de cotejo en las facturas nuevas. No remite nada a la AEAT ni convierte la app en un SIF certificado.",
+                    );
+                    ui.label(
+                        RichText::new(
+                            "Registro local y QR; no envía nada a la AEAT. Para remitir haría falta un sistema certificado.",
+                        )
+                        .size(10.0)
+                        .color(tema::TENUE),
+                    );
+                });
                 ui.end_row();
             });
 
@@ -5342,12 +6828,19 @@ impl App {
 
             ui.add_space(16.0);
             ui.separator();
-            ui.label(
-                RichText::new("Copias de seguridad")
-                    .size(15.0)
-                    .strong()
-                    .color(tema::TEXTO),
-            );
+            ui.horizontal(|ui| {
+                ui.label(
+                    RichText::new("Copias de seguridad")
+                        .size(15.0)
+                        .strong()
+                        .color(tema::TEXTO),
+                );
+                tema::icono_ayuda(
+                    ui,
+                    "Copias de seguridad",
+                    "Un fichero JSON con todos tus datos. Restaurar sustituye los datos actuales, pero antes se guarda una copia automática del estado que había.",
+                );
+            });
             ui.label(
                 RichText::new("Un fichero completo de tus datos, con fecha, en la carpeta «copias».")
                     .size(11.5)
@@ -5466,6 +6959,317 @@ impl App {
         });
     }
 
+    /// Crea y emite una R1 por diferencias. La original no se anula: se marca
+    /// como rectificada y se enlaza con la nueva factura.
+    /// Crea una R1 por diferencias a partir de una factura emitida. La original
+    /// no se toca salvo para dejar la marca `rectificada_por`; la R1 se emite
+    /// con su propio número, registro y fecha.
+    fn crear_rectificativa(&mut self, buf: &RectificarBuf) -> Result<u64, String> {
+        let original = self
+            .db
+            .documento(buf.original_id)
+            .cloned()
+            .ok_or("La factura original ya no existe.")?;
+        if original.estado == Estado::Anulado {
+            return Err("Una factura anulada no se rectifica: emite una nueva.".into());
+        }
+        if original.rectifica.is_some() {
+            return Err("Una rectificativa no se rectifica: crea otra corrección sobre la original.".into());
+        }
+        let base = parse_cents(buf.base.trim())
+            .ok_or("La diferencia de base no es un importe válido.")?;
+        if base == 0 {
+            return Err("La diferencia de base no puede ser cero.".into());
+        }
+        let iva_tecleado = parse_pb(buf.iva.trim()).ok_or("El IVA debe ser un número (0–100).")?;
+        // En exportación, intracomunitaria o exenta el IVA no se devenga: la
+        // línea debe quedar a 0 aunque el campo tenga un valor viejo.
+        let iva = if original.operacion.lleva_iva() {
+            iva_tecleado
+        } else {
+            0
+        };
+        let motivo = buf.motivo.trim().to_string();
+        if motivo.is_empty() {
+            return Err("Escribe el motivo de la rectificación.".into());
+        }
+
+        let hoy = chrono::Local::now().date_naive();
+        let serie = format!("R{}", hoy.format("%Y"));
+        let mut d = Documento::nuevo(
+            TipoDoc::Factura,
+            original.cliente.clone(),
+            original.irpf_pb,
+            serie,
+        );
+        d.id = self.db.id();
+        d.fecha = hoy;
+        // Conserva el plazo de pago de la original (30 días por defecto, pero
+        // puede ser 60 o el que se haya pactado).
+        let plazo = (original.vencimiento - original.fecha)
+            .num_days()
+            .clamp(0, 365);
+        d.vencimiento = hoy + chrono::Duration::days(plazo);
+        d.forma_pago = original.forma_pago.clone();
+        d.operacion = original.operacion;
+        d.recargo_pb = original.recargo_pb;
+        d.rectifica = Some(crate::model::Rectificacion {
+            documento_id: original.id,
+            num_serie: original.num_serie_aeat(),
+            etiqueta: original.etiqueta_numero(),
+            fecha: original.fecha,
+            tipo: "I".to_string(),
+        });
+        d.motivo_rectificacion = motivo.clone();
+        d.lineas = vec![Linea {
+            descripcion: format!(
+                "Rectificación de la factura {}: {}",
+                original.etiqueta_numero(),
+                motivo
+            ),
+            cantidad_milli: 1000,
+            precio_cents: base,
+            descuento_pb: 0,
+            iva_pb: iva,
+        }];
+        d.notas = format!(
+            "Rectificativa por diferencias de la factura {} del {}.",
+            original.etiqueta_numero(),
+            original.fecha.format("%d/%m/%Y")
+        );
+        let id = d.id;
+        self.db.documentos.push(d);
+
+        match self.emitir(id) {
+            Ok(()) => {
+                if let Some(o) = self.db.documento_mut(original.id) {
+                    o.rectificada_por = Some(id);
+                }
+                self.guardar();
+                Ok(id)
+            }
+            Err(e) => {
+                // Si no llegó a numerarse, no dejamos un borrador huérfano.
+                let sin_numero = self
+                    .db
+                    .documento(id)
+                    .map(|d| d.numero == 0)
+                    .unwrap_or(false);
+                if sin_numero {
+                    self.db.documentos.retain(|d| d.id != id);
+                    self.guardar();
+                }
+                Err(e)
+            }
+        }
+    }
+
+    /// Ventana de corrección: pide la diferencia, valida y previsualiza la R1
+    /// antes de emitirla. La ayuda contextual explica cuándo usar R1 o anular.
+    fn ventana_rectificar(&mut self, ctx: &egui::Context) {
+        let Some(buf) = self.rectificar.clone() else {
+            return;
+        };
+        let Some(original) = self.db.documento(buf.original_id).cloned() else {
+            self.rectificar = None;
+            return;
+        };
+        let mut base = buf.base.clone();
+        let mut iva = buf.iva.clone();
+        let mut motivo = buf.motivo.clone();
+        let mut cerrar = false;
+        let mut confirmar = false;
+        let mut abrir_ayuda = false;
+
+        egui::Window::new("Rectificar factura (R1)")
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .default_width(430.0)
+            .show(ctx, |ui| {
+                ui.label(
+                    RichText::new(format!(
+                        "Original: {} · {}",
+                        original.etiqueta_numero(),
+                        original.cliente.nombre_completo()
+                    ))
+                    .strong(),
+                );
+                ui.label(
+                    RichText::new(
+                        "Se emite una factura rectificativa R1 por la diferencia. La original no se anula ni se borra: queda marcada como rectificada.",
+                    )
+                    .size(11.0)
+                    .color(tema::SUAVE),
+                );
+                if ui
+                    .link("¿Cuándo usar una R1 y cuándo anular?")
+                    .clicked()
+                {
+                    abrir_ayuda = true;
+                }
+                ui.add_space(8.0);
+                egui::Grid::new("rectificar_campos")
+                    .num_columns(2)
+                    .spacing([10.0, 6.0])
+                    .show(ui, |ui| {
+                        tema::etiqueta_ayuda(
+                            ui,
+                            "Diferencia de base (EUR)",
+                            "Diferencia con signo: negativa para bajar la base de la original y positiva para subirla. No escribas el total de la nueva factura.",
+                        );
+                        ui.add(
+                            egui::TextEdit::singleline(&mut base)
+                                .hint_text("Ej.: -100,00 para bajar 100 €"),
+                        );
+                        ui.end_row();
+                        tema::etiqueta_ayuda(
+                            ui,
+                            "IVA de la diferencia %",
+                            "Tipo de IVA que se aplica a la diferencia. Si la original mezcla varios tipos, crea una R1 por cada uno.",
+                        );
+                        ui.add(egui::TextEdit::singleline(&mut iva).desired_width(90.0));
+                        ui.end_row();
+                        tema::etiqueta_ayuda(
+                            ui,
+                            "Motivo",
+                            "Explica brevemente por qué rectificas (descuento no aplicado, error de precio, devolución…). Se imprime y forma parte del registro.",
+                        );
+                        ui.add(
+                            egui::TextEdit::singleline(&mut motivo)
+                                .hint_text("Ej.: descuento no aplicado"),
+                        );
+                        ui.end_row();
+                    });
+                ui.add_space(6.0);
+                // Se valida después de dibujar los campos: así el botón se
+                // activa en el mismo fotograma en que se termina de escribir.
+                let base_c = parse_cents(base.trim());
+                let iva_pb = parse_pb(iva.trim());
+                let (cuota, recargo, retencion) = match (base_c, iva_pb) {
+                    (Some(b), Some(i)) => {
+                        let cuota = if original.operacion.lleva_iva() {
+                            crate::model::div_round(b * i as i64, 10_000)
+                        } else {
+                            0
+                        };
+                        let recargo = if original.operacion.lleva_iva() {
+                            crate::model::div_round(b * original.recargo_pb as i64, 10_000)
+                        } else {
+                            0
+                        };
+                        (cuota, recargo, crate::model::div_round(b * original.irpf_pb as i64, 10_000))
+                    }
+                    _ => (0, 0, 0),
+                };
+                let total = base_c.unwrap_or(0) + cuota + recargo - retencion;
+                let valido = base_c.map(|b| b != 0).unwrap_or(false)
+                    && iva_pb.is_some()
+                    && !motivo.trim().is_empty();
+                let tipos_iva: Vec<String> = original
+                    .totales()
+                    .bases
+                    .iter()
+                    .map(|(tipo, _, _)| fmt_pb(*tipo))
+                    .collect();
+                if tipos_iva.len() > 1 {
+                    ui.label(
+                        RichText::new(format!(
+                            "La original mezcla varios tipos de IVA ({} %). Esta R1 aplica un solo tipo: si la diferencia afecta a varios, crea una R1 por cada tipo.",
+                            tipos_iva.join(", ")
+                        ))
+                        .size(10.0)
+                        .color(tema::AMBAR),
+                    );
+                }
+                ui.label(
+                    RichText::new("FacturaE no está disponible para R1; el PDF sí.")
+                        .size(10.0)
+                        .color(tema::TENUE),
+                );
+                ui.label(
+                    RichText::new(format!(
+                        "IVA: {} · Recargo: {} · IRPF: {} · Total R1: {}",
+                        fmt_cents_eur(cuota),
+                        fmt_cents_eur(recargo),
+                        fmt_cents_eur(retencion),
+                        fmt_cents_eur(total)
+                    ))
+                    .monospace()
+                    .size(11.0),
+                );
+                if original.operacion != TipoOperacion::Nacional {
+                    ui.label(
+                        RichText::new(
+                            "La operación original no lleva IVA: la rectificativa tampoco.",
+                        )
+                        .size(10.0)
+                        .color(tema::TENUE),
+                    );
+                }
+                if base_c == Some(0) {
+                    ui.label(
+                        RichText::new("La diferencia no puede ser cero.")
+                            .size(10.0)
+                            .color(tema::ROJO),
+                    );
+                }
+                ui.add_space(8.0);
+                let intro = ui.input(|i| i.key_pressed(egui::Key::Enter));
+                ui.horizontal(|ui| {
+                    if ui
+                        .add_enabled(valido, egui::Button::new("Crear y emitir R1"))
+                        .clicked()
+                        || (intro && valido)
+                    {
+                        confirmar = true;
+                    }
+                    if ui.button("Cancelar").clicked() {
+                        cerrar = true;
+                    }
+                });
+                ui.label(
+                    RichText::new("También puedes pulsar Intro para crear.")
+                        .size(10.0)
+                        .color(tema::TENUE),
+                );
+            });
+
+        if abrir_ayuda {
+            self.ayuda_verifactu = true;
+        }
+
+        if confirmar {
+            let nuevo = RectificarBuf {
+                original_id: buf.original_id,
+                base: base.clone(),
+                iva: iva.clone(),
+                motivo: motivo.clone(),
+            };
+            match self.crear_rectificativa(&nuevo) {
+                Ok(id) => {
+                    self.seleccion = Some(id);
+                    self.vista = Vista::Facturas;
+                    self.rectificar = None;
+                    self.avisar(
+                        "Rectificativa R1 emitida y encadenada. La original sigue intacta.",
+                        false,
+                    );
+                }
+                Err(e) => self.avisar(e, true),
+            }
+        } else if cerrar {
+            self.rectificar = None;
+        } else {
+            self.rectificar = Some(RectificarBuf {
+                original_id: buf.original_id,
+                base,
+                iva,
+                motivo,
+            });
+        }
+    }
+
     fn ventana_anular(&mut self, ctx: &egui::Context) {
         let Some((id, motivo)) = self.anular.clone() else {
             return;
@@ -5478,7 +7282,14 @@ impl App {
             .resizable(false)
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
             .show(ctx, |ui| {
-                ui.label("Anular genera un registro de anulación encadenado. La factura no se borra.");
+                ui.horizontal(|ui| {
+                    ui.label("Anular genera un registro de anulación encadenado. La factura no se borra.");
+                    tema::icono_ayuda(
+                        ui,
+                        "Anulación",
+                        "La anulación conserva el alta original y añade un registro nuevo con importes a cero. No se puede deshacer: si sólo cambia un importe, valora una rectificativa R1.",
+                    );
+                });
                 ui.add(egui::TextEdit::singleline(&mut motivo).hint_text("Motivo de la anulación"));
                 ui.horizontal(|ui| {
                     if ui.button("Anular").clicked() {

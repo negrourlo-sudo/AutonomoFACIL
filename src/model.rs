@@ -52,12 +52,18 @@ pub fn fmt_cents_eur(c: i64) -> String {
     format!("{} EUR", fmt_cents(c))
 }
 
+/// Deja el NIF como lo espera la AEAT: mayúsculas y sin espacios, guiones ni
+/// puntos. Así la huella y el QR no cambian por cómo se haya tecleado.
+pub fn nif_normalizado(nif: &str) -> String {
+    nif.trim().to_uppercase().replace([' ', '-', '.'], "")
+}
+
 /// Comprueba el NIF español: DNI (8 dígitos + letra), NIE (X/Y/Z + 7 dígitos
 /// + letra) y CIF (letra + 7 dígitos + control). Se aceptan K, L y M, que
 /// siguen la regla del DNI. Devuelve `false` si la letra de control no cuadra,
 /// que es el error que de verdad rechaza la AEAT.
 pub fn nif_valido(nif: &str) -> bool {
-    let n = nif.trim().to_uppercase().replace([' ', '-', '.'], "");
+    let n = nif_normalizado(nif);
     let b = n.as_bytes();
     if b.len() != 9 {
         return false;
@@ -146,8 +152,9 @@ pub fn fmt_pb(pb: i32) -> String {
     }
 }
 
-/// `"21,5"` o `"21.5"` o `"21"` -> puntos base. Tolerante porque lo teclea una
-/// persona.
+/// `"21,5"` o `"21.5"` o `"21"` -> puntos base. Acepta de 0 a 100 %,
+/// que es el rango de IVA, IRPF, recargo y descuento que se teclea en la app.
+/// Tolerante con coma y con el signo `%` porque lo escribe una persona.
 pub fn parse_pb(s: &str) -> Option<i32> {
     let limpio = s.trim().replace(',', ".").replace('%', "");
     let limpio = limpio.trim();
@@ -155,7 +162,7 @@ pub fn parse_pb(s: &str) -> Option<i32> {
         return Some(0);
     }
     let v: f64 = limpio.parse().ok()?;
-    if !v.is_finite() || v < 0.0 || v > 1000.0 {
+    if !v.is_finite() || v < 0.0 || v > 100.0 {
         return None;
     }
     Some((v * 100.0).round() as i32)
@@ -696,6 +703,20 @@ pub struct RegistroVerifactu {
     pub fecha_hora_gen: String,
     pub qr_url: String,
     pub encadenamiento: String,
+    /// En una R1: serie+número de la factura rectificada.
+    #[serde(default)]
+    pub facturas_rectificadas: Vec<String>,
+    /// "I" por diferencias o "S" sustitutiva.
+    #[serde(default)]
+    pub tipo_rectificativa: String,
+    /// Versión del formato de huella. Los datos anteriores a la corrección de
+    /// la anulación no tienen este campo y valen 0; los nuevos valen 2.
+    #[serde(default)]
+    pub version: u8,
+    /// Desempate local para dos registros generados en el mismo segundo. No
+    /// forma parte de la huella ni del XML oficial; sólo ordena la cadena.
+    #[serde(default)]
+    pub orden: u64,
 }
 
 /// Cobro recibido de una factura. Puede haber varios y parciales: el saldo
@@ -704,6 +725,20 @@ pub struct RegistroVerifactu {
 pub struct Pago {
     pub fecha: NaiveDate,
     pub importe_cents: i64,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct Rectificacion {
+    /// Factura original que se corrige. No se anula: se referencia aquí.
+    pub documento_id: u64,
+    /// Serie + número de la original tal y como lo espera la AEAT.
+    pub num_serie: String,
+    /// La misma referencia pero legible: «2026/0014».
+    #[serde(default)]
+    pub etiqueta: String,
+    pub fecha: NaiveDate,
+    /// "I" por diferencias; "S" sustitutiva (reservado).
+    pub tipo: String,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -729,6 +764,18 @@ pub struct Documento {
     pub motivo_anulacion: String,
     #[serde(default)]
     pub verifactu: Option<RegistroVerifactu>,
+    /// Registro de anulación (tipo N). Va aparte para no borrar el alta: la
+    /// cadena necesita conservar los dos, como en la norma.
+    #[serde(default)]
+    pub verifactu_anulacion: Option<RegistroVerifactu>,
+    /// Si es una factura rectificativa R1, a qué factura corrige y por qué.
+    #[serde(default)]
+    pub rectifica: Option<Rectificacion>,
+    #[serde(default)]
+    pub motivo_rectificacion: String,
+    /// En la factura original: id de la última R1 que la corrige.
+    #[serde(default)]
+    pub rectificada_por: Option<u64>,
     /// Ruta del último PDF generado (informativo).
     #[serde(default)]
     pub pdf: String,
@@ -762,6 +809,10 @@ impl Documento {
             forma_pago: "Transferencia".to_string(),
             motivo_anulacion: String::new(),
             verifactu: None,
+            verifactu_anulacion: None,
+            rectifica: None,
+            motivo_rectificacion: String::new(),
+            rectificada_por: None,
             pdf: String::new(),
             pagos: Vec::new(),
             operacion: TipoOperacion::Nacional,
@@ -910,9 +961,24 @@ impl Documento {
         self.cliente.nif.trim().is_empty()
     }
 
+    pub fn es_rectificativa(&self) -> bool {
+        self.rectifica.is_some()
+    }
+
+    /// Etiqueta para la ficha y el PDF: una R1 no es una factura normal.
+    pub fn etiqueta_tipo(&self) -> &'static str {
+        if self.es_rectificativa() {
+            "Factura rectificativa R1"
+        } else {
+            self.tipo.nombre()
+        }
+    }
+
     /// Código de tipo de factura para Verifactu.
     pub fn tipo_factura_aeat(&self) -> &'static str {
-        if self.es_simplificada() {
+        if self.es_rectificativa() {
+            "R1"
+        } else if self.es_simplificada() {
             "F2"
         } else {
             "F1"
@@ -938,6 +1004,25 @@ mod tests {
         });
         d.aplicar_cliente();
         d
+    }
+
+    #[test]
+    fn la_rectificativa_es_r1_y_admite_diferencias_negativas() {
+        let mut d = doc_con(RegimenCliente::General, 2100, 100_000);
+        d.rectifica = Some(Rectificacion {
+            documento_id: 7,
+            num_serie: "20260007".to_string(),
+            etiqueta: "2026/0007".to_string(),
+            fecha: NaiveDate::from_ymd_opt(2026, 3, 1).unwrap(),
+            tipo: "I".to_string(),
+        });
+        assert_eq!(d.tipo_factura_aeat(), "R1");
+        assert_eq!(d.etiqueta_tipo(), "Factura rectificativa R1");
+        d.lineas[0].precio_cents = -10_000;
+        let t = d.totales();
+        assert_eq!(t.base_total, -10_000);
+        assert_eq!(t.cuota_iva, -2_100);
+        assert_eq!(t.total, -12_100);
     }
 
     #[test]
@@ -985,6 +1070,16 @@ mod tests {
         };
         assert_eq!(r.cuota_iva(), 259);
         assert_eq!(r.total(), 1_493);
+    }
+
+    #[test]
+    fn los_porcentajes_no_pasan_del_100() {
+        assert_eq!(parse_pb("21,5"), Some(2150));
+        assert_eq!(parse_pb("100"), Some(10_000));
+        assert_eq!(parse_pb(""), Some(0));
+        assert!(parse_pb("100,01").is_none());
+        assert!(parse_pb("1000").is_none());
+        assert!(parse_pb("-1").is_none());
     }
 
     #[test]

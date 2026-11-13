@@ -22,6 +22,8 @@ Unicode true
 
 !include "MUI2.nsh"
 !include "FileFunc.nsh"
+!include "LogicLib.nsh"
+!include "nsDialogs.nsh"
 
 !define APP_NAME    "AutónomoFACIL"
 !define APP_EXE     "autonomofacil.exe"
@@ -49,6 +51,11 @@ SetCompressorDictSize 32
 ShowInstDetails show
 ShowUninstDetails show
 BrandingText "${APP_NAME} ${APP_VERSION}  ·  instalación por usuario"
+
+; Página propia del desinstalador: por defecto conserva los datos y sólo los
+; borra si el usuario marca la casilla expresamente.
+Var BorrarDatosCheck
+Var BorrarDatos
 
 ; Propiedades del fichero
 VIProductVersion "${APP_VERSION4}"
@@ -84,7 +91,7 @@ ningún archivo del sistema.$\r$\n$\r$\nPulsa Siguiente para continuar."
 !define MUI_FINISHPAGE_TITLE       "${APP_NAME} ya está instalado"
 !define MUI_FINISHPAGE_TEXT        "Puedes abrirlo desde el menú Inicio o el acceso directo del escritorio.$\r$\n$\r$\n\
 Tus datos se guardan en:%$\r$\n%APPDATA%\AutonomoFACIL$\r$\n$\r$\n\
-Desinstalar el programa no borra ese fichero."
+Al desinstalar podrás decidir si quieres borrarlos también."
 !define MUI_FINISHPAGE_RUN         "$INSTDIR\${APP_EXE}"
 !define MUI_FINISHPAGE_RUN_TEXT    "Abrir ${APP_NAME}"
 !define MUI_FINISHPAGE_NOREBOOTSUPPORT
@@ -97,6 +104,7 @@ Desinstalar el programa no borra ese fichero."
 !insertmacro MUI_PAGE_FINISH
 
 !insertmacro MUI_UNPAGE_CONFIRM
+UninstPage custom un.PaginaDatos un.PaginaDatosSalir
 !insertmacro MUI_UNPAGE_INSTFILES
 
 !insertmacro MUI_LANGUAGE "Spanish"
@@ -137,6 +145,39 @@ Section "Instalar ${APP_NAME}" SecPrincipal
   WriteRegStr HKCU "Software\${APP_KEY}" "InstallDir" "$INSTDIR"
 SectionEnd
 
+; ---- Página de datos del desinstalador -------------------------------------
+Function un.PaginaDatos
+  !insertmacro MUI_HEADER_TEXT "Datos y exportaciones" "Decide qué hacer con tu información antes de desinstalar."
+
+  nsDialogs::Create 1018
+  Pop $0
+  ${If} $0 == error
+    Abort
+  ${EndIf}
+
+  ${NSD_CreateLabel} 0 0 100% 46u "La aplicación guarda tus datos, exportaciones, nóminas y copias de seguridad en:%$\r$\n$APPDATA\AutonomoFACIL%$\r$\nSi vienes de una versión anterior, también puede existir $APPDATA\Facturacion."
+  Pop $0
+
+  ${NSD_CreateCheckbox} 0 54u 100% 20u "Borrar también todos mis datos, exportaciones y copias de seguridad"
+  Pop $BorrarDatosCheck
+  ${NSD_SetState} $BorrarDatosCheck ${BST_UNCHECKED}
+
+  ${NSD_CreateLabel} 0 84u 100% 58u "Déjalo sin marcar para conservar todo y poder recuperarlo si vuelves a instalar. Si lo marcas, se borran ambas carpetas de forma permanente y no se podrán recuperar."
+  Pop $0
+
+  nsDialogs::Show
+FunctionEnd
+
+Function un.PaginaDatosSalir
+  ${NSD_GetState} $BorrarDatosCheck $BorrarDatos
+FunctionEnd
+
+; En una desinstalación silenciosa no se muestra la página; el valor queda a
+; cero y los datos se conservan.
+Function un.onInit
+  StrCpy $BorrarDatos 0
+FunctionEnd
+
 ; ---- Desinstalación --------------------------------------------------------
 Section "Uninstall"
   SetShellVarContext current
@@ -154,5 +195,16 @@ Section "Uninstall"
   DeleteRegKey HKCU "${CLAVE}"
   DeleteRegKey HKCU "Software\${APP_KEY}"
 
-  ; Los datos de %APPDATA%\AutonomoFACIL no se tocan a propósito: son del usuario.
+  ; Los datos son del usuario: sólo se borran si marcó la casilla. En una
+  ; desinstalación silenciosa (/S) la página no se muestra y BorrarDatos queda
+  ; a cero, así que también se conservan por defecto.
+  ${If} $BorrarDatos == "1"
+    DetailPrint "Borrando datos, exportaciones y copias de seguridad..."
+    RMDir /r "$APPDATA\AutonomoFACIL"
+    RMDir /r "$APPDATA\Facturacion"
+    ${If} ${FileExists} "$APPDATA\AutonomoFACIL\*.*"
+    ${OrIf} ${FileExists} "$APPDATA\Facturacion\*.*"
+      MessageBox MB_ICONEXCLAMATION|MB_OK "No se pudieron borrar todos los datos. Cierra AutónomoFACIL y vuelve a intentarlo, o borra a mano: $APPDATA\AutonomoFACIL y $APPDATA\Facturacion"
+    ${EndIf}
+  ${EndIf}
 SectionEnd

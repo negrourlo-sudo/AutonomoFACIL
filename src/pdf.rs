@@ -7,12 +7,20 @@
 //! El texto va en WinAnsi, que cubre el español completo (á é í ó ú ñ ü ¿ ¡ º ª)
 //! más el euro (0x80 en cp1252). Cualquier otro carácter sale como `?`.
 
-use crate::model::{fmt_cents, fmt_cents_eur, fmt_pb, fmt_qty, Documento, Empresa, Linea};
+use crate::empleados::{Empleado, Nomina};
+use crate::model::{
+    fmt_cents, fmt_cents_eur, fmt_pb, fmt_qty, Documento, Empresa, Linea, RegistroVerifactu,
+};
 
 const ANCHO: f32 = 595.28;
 const ALTO: f32 = 841.89;
 const MARGEN: f32 = 45.0;
 const DERECHA: f32 = ANCHO - MARGEN;
+const MM_PT: f32 = 72.0 / 25.4;
+/// El reglamento exige un QR de 30 a 40 mm; 34 mm deja sitio a la leyenda.
+const QR_LADO: f32 = 34.0 * MM_PT;
+/// Zona de silencio mínima de 2 mm alrededor del código.
+const QR_SILENCIO: f32 = 2.0 * MM_PT;
 
 /// Anchos Helvetica (unidades/1000) para ASCII 32..126.
 const HELV: [u16; 95] = [
@@ -138,17 +146,27 @@ impl Pagina {
         ));
     }
 
+    /// QR de cotejo. Nivel M y zona de silencio blanca, como pide el
+    /// reglamento; el tamaño se pasa en puntos (34 mm en la factura).
     fn qr(&mut self, x0: f32, y_top: f32, lado: f32, datos: &str) {
-        let Ok(code) = qrcode::QrCode::new(datos.as_bytes()) else {
+        let Ok(code) = qrcode::QrCode::with_error_correction_level(
+            datos.as_bytes(),
+            qrcode::EcLevel::M,
+        ) else {
             return;
         };
+        // Marco blanco: sin él, el lector puede perder los módulos del borde.
+        self.rect(x0, y_top, lado, lado, 1.0);
         let n = code.width();
         let colores = code.to_colors();
-        let m = lado / n as f32;
+        let interior = (lado - 2.0 * QR_SILENCIO).max(1.0);
+        let m = interior / n as f32;
+        let x = x0 + QR_SILENCIO;
+        let y = y_top + QR_SILENCIO;
         for fy in 0..n {
             for fx in 0..n {
                 if colores[fy * n + fx] == qrcode::Color::Dark {
-                    self.rect(x0 + fx as f32 * m, y_top + fy as f32 * m, m + 0.05, m + 0.05, 0.0);
+                    self.rect(x + fx as f32 * m, y + fy as f32 * m, m + 0.05, m + 0.05, 0.0);
                 }
             }
         }
@@ -234,15 +252,17 @@ fn ensamblar(paginas: Vec<String>, logo: Option<&crate::logo::Jpeg>) -> Vec<u8> 
             &mut offsets,
             pid,
             &format!(
-                "<</Type/Page/Parent 2 0 R/MediaBox[0 0 {:.2} {:.2}]/Resources<</Font<</F1 3 0 R/F2 4 0 R>>{}/Contents {} 0 R>>",
+                "<</Type/Page/Parent 2 0 R/MediaBox[0 0 {:.2} {:.2}]/Resources<</Font<</F1 3 0 R/F2 4 0 R>>{}>>/Contents {} 0 R>>",
                 ANCHO,
                 ALTO,
                 if logo.is_some() { "/XObject<</Im1 5 0 R>>" } else { "" },
                 cid
             ),
         );
+        // El contenido de `p.ops` termina en salto de línea. No se añade otro:
+        // /Length debe coincidir con los bytes reales del stream.
         let stream = format!(
-            "<</Length {}>>\nstream\n{}\nendstream",
+            "<</Length {}>>\nstream\n{}endstream",
             contenido.len(),
             contenido
         );
@@ -273,6 +293,7 @@ fn cabecera(
     empresa: &Empresa,
     titulo: &str,
     logo: Option<&crate::logo::Jpeg>,
+    desplazamiento: f32,
 ) {
     p.rect(0.0, 0.0, ANCHO, 6.0, 0.10);
 
@@ -285,7 +306,7 @@ fn cabecera(
         x = MARGEN + w + 12.0;
     }
 
-    let mut y = MARGEN + 14.0;
+    let mut y = MARGEN + 14.0 + desplazamiento;
     let nombre = if empresa.nombre.trim().is_empty() {
         "Tu empresa"
     } else {
@@ -317,8 +338,15 @@ fn cabecera(
         p.texto(x, y, 9.0, false, 0.35, &empresa.telefono);
     }
 
-    p.texto_der(DERECHA, MARGEN + 16.0, 22.0, true, 0.10, titulo);
-    let mut y2 = MARGEN + 34.0;
+    p.texto_der(
+        DERECHA,
+        MARGEN + 16.0 + desplazamiento,
+        22.0,
+        true,
+        0.10,
+        titulo,
+    );
+    let mut y2 = MARGEN + 34.0 + desplazamiento;
     p.texto_der(DERECHA, y2, 11.0, true, 0.10, &doc.etiqueta_numero());
     y2 += 13.0;
     let estado = match doc.estado {
@@ -466,34 +494,51 @@ fn bloque_totales(p: &mut Pagina, doc: &Documento, y: f32) -> f32 {
     y + 20.0
 }
 
+/// QR tributario de la primera página. La AEAT exige que sea el primer QR y
+/// que vaya al principio, antes del contenido; no se repite en las demás
+/// páginas. Va centrado y con la etiqueta «QR tributario:» encima.
+fn qr_tributario(p: &mut Pagina, reg: &RegistroVerifactu) {
+    let x = (ANCHO - QR_LADO) / 2.0;
+    p.texto(x, 37.0, 7.0, true, 0.25, "QR tributario:");
+    p.qr(x, 45.0, QR_LADO, &reg.qr_url);
+
+    let tx = x + QR_LADO + 12.0;
+    p.texto(tx, 57.0, 7.5, true, 0.25, "Registro local encadenado");
+    p.texto(
+        tx,
+        69.0,
+        6.6,
+        false,
+        0.35,
+        "No remitido a la AEAT.",
+    );
+    p.texto(
+        tx,
+        79.0,
+        6.6,
+        false,
+        0.35,
+        "QR de cotejo, no verificable.",
+    );
+    let mut h = reg.huella.clone();
+    h.truncate(24);
+    p.texto(
+        tx,
+        95.0,
+        6.2,
+        false,
+        0.55,
+        &format!("Huella: {}...", h),
+    );
+}
+
 fn pie(p: &mut Pagina, doc: &Documento, empresa: &Empresa, pagina: usize, total: usize) {
     let y_fin = ALTO - 34.0;
     p.linea(MARGEN, y_fin - 26.0, DERECHA, y_fin - 26.0, 0.3, 0.85);
 
     let y = y_fin - 16.0;
 
-    if let Some(reg) = &doc.verifactu {
-        p.qr(MARGEN, y - 62.0, 62.0, &reg.qr_url);
-        p.texto(
-            MARGEN + 70.0,
-            y - 50.0,
-            7.0,
-            false,
-            0.35,
-            "Factura verificable en la sede electrónica de la AEAT",
-        );
-        p.texto(MARGEN + 70.0, y - 40.0, 7.0, false, 0.35, "o en este QR.");
-        let mut h = reg.huella.clone();
-        h.truncate(32);
-        p.texto(
-            MARGEN + 70.0,
-            y - 30.0,
-            6.5,
-            false,
-            0.55,
-            &format!("Huella: {}…", h),
-        );
-    } else if doc.tipo == crate::model::TipoDoc::Proforma {
+    if doc.tipo == crate::model::TipoDoc::Proforma {
         p.texto(
             MARGEN,
             y - 30.0,
@@ -536,20 +581,192 @@ fn pie(p: &mut Pagina, doc: &Documento, empresa: &Empresa, pagina: usize, total:
     );
 }
 
+/// Resumen de nómina sencillo. Es un documento de trabajo, no el modelo
+/// oficial de nómina ni el boletín de cotización.
+pub fn nomina(n: &Nomina, e: &Empleado, empresa: &Empresa) -> Vec<u8> {
+    let mut p = Pagina::nueva();
+    p.rect(0.0, 0.0, ANCHO, 6.0, 0.10);
+
+    // Marca de borrador en la esquina superior derecha. Va en el margen,
+    // separada del título, para que se vea incluso al imprimir en blanco y
+    // negro y no se confunda con un recibo oficial.
+    p.rect(DERECHA - 150.0, 28.0, 150.0, 16.0, 0.18);
+    p.texto_der(
+        DERECHA - 6.0,
+        39.0,
+        8.5,
+        true,
+        1.0,
+        "BORRADOR · NO OFICIAL",
+    );
+
+    let mut y = MARGEN + 14.0;
+    p.texto(
+        MARGEN,
+        y,
+        15.0,
+        true,
+        0.10,
+        &if empresa.nombre.trim().is_empty() {
+            "TU EMPRESA".to_string()
+        } else {
+            empresa.nombre.to_uppercase()
+        },
+    );
+    p.texto_der(DERECHA, y, 16.0, true, 0.10, "RESUMEN DE NÓMINA");
+    y += 16.0;
+    if !empresa.nif.trim().is_empty() {
+        p.texto(MARGEN, y, 9.0, false, 0.35, &format!("NIF {}", empresa.nif));
+    }
+    p.texto_der(
+        DERECHA,
+        y,
+        9.0,
+        false,
+        0.35,
+        &format!("Periodo {:02}/{}", n.mes, n.anyo),
+    );
+    y += 18.0;
+    p.linea(MARGEN, y, DERECHA, y, 0.5, 0.55);
+
+    y += 18.0;
+    p.texto(MARGEN, y, 10.0, true, 0.15, "TRABAJADOR");
+    y += 14.0;
+    let nombre = if n.empleado_nombre.trim().is_empty() {
+        e.nombre_completo()
+    } else {
+        n.empleado_nombre.clone()
+    };
+    p.texto(MARGEN, y, 10.0, true, 0.10, &nombre);
+    y += 13.0;
+    let mut datos = Vec::new();
+    if !n.empleado_nif.trim().is_empty() {
+        datos.push(format!("NIF {}", n.empleado_nif));
+    } else if !e.nif.trim().is_empty() {
+        datos.push(format!("NIF {}", e.nif));
+    }
+    if !n.empleado_naf.trim().is_empty() {
+        datos.push(format!("NAF {}", n.empleado_naf));
+    } else if !e.naf.trim().is_empty() {
+        datos.push(format!("NAF {}", e.naf));
+    }
+    if !n.puesto.trim().is_empty() {
+        datos.push(n.puesto.clone());
+    } else if !e.puesto.trim().is_empty() {
+        datos.push(e.puesto.clone());
+    }
+    if !datos.is_empty() {
+        p.texto(MARGEN, y, 8.5, false, 0.35, &datos.join(" · "));
+        y += 12.0;
+    }
+    p.texto(
+        MARGEN,
+        y,
+        8.5,
+        false,
+        0.35,
+        &format!(
+            "Contrato: {}",
+            n.tipo_contrato.unwrap_or(e.tipo_contrato).etiqueta()
+        ),
+    );
+
+    y += 24.0;
+    p.texto(MARGEN, y, 10.0, true, 0.15, "DEVENGOS");
+    p.texto_der(DERECHA, y, 9.0, true, 0.15, "IMPORTE");
+    y += 12.0;
+    p.linea(MARGEN, y, DERECHA, y, 0.3, 0.75);
+    y += 13.0;
+    p.texto(MARGEN, y, 9.0, false, 0.25, "Salario bruto mensual");
+    p.texto_der(DERECHA, y, 9.0, false, 0.25, &fmt_cents_eur(n.bruto_cents));
+
+    y += 24.0;
+    p.texto(MARGEN, y, 10.0, true, 0.15, "DEDUCCIONES");
+    p.texto_der(DERECHA, y, 9.0, true, 0.15, "IMPORTE");
+    y += 12.0;
+    p.linea(MARGEN, y, DERECHA, y, 0.3, 0.75);
+    y += 13.0;
+    p.texto(MARGEN, y, 9.0, false, 0.25, "Seguridad Social a cargo del trabajador");
+    p.texto_der(DERECHA, y, 9.0, false, 0.25, &format!("-{}", fmt_cents_eur(n.ss_empleado_cents)));
+    y += 12.0;
+    p.texto(
+        MARGEN,
+        y,
+        9.0,
+        false,
+        0.25,
+        &format!(
+            "Retención IRPF {} %",
+            fmt_pb(n.irpf_pb.unwrap_or(e.irpf_pb))
+        ),
+    );
+    p.texto_der(DERECHA, y, 9.0, false, 0.25, &format!("-{}", fmt_cents_eur(n.irpf_cents)));
+
+    y += 24.0;
+    p.linea(MARGEN, y, DERECHA, y, 0.6, 0.35);
+    y += 10.0;
+    p.texto(MARGEN, y, 12.0, true, 0.10, "NETO A PERCIBIR");
+    p.texto_der(DERECHA, y, 13.0, true, 0.10, &fmt_cents_eur(n.neto_cents));
+
+    y += 28.0;
+    p.texto(MARGEN, y, 9.0, true, 0.20, "COSTE PARA LA EMPRESA");
+    y += 13.0;
+    p.texto(MARGEN, y, 9.0, false, 0.30, "Seguridad Social a cargo de la empresa");
+    p.texto_der(DERECHA, y, 9.0, false, 0.30, &fmt_cents_eur(n.ss_empresa_cents));
+    y += 13.0;
+    p.texto(MARGEN, y, 9.0, true, 0.20, "Coste total");
+    p.texto_der(DERECHA, y, 9.0, true, 0.20, &fmt_cents_eur(n.coste_empresa_cents));
+
+    p.texto(
+        MARGEN,
+        ALTO - 64.0,
+        7.0,
+        false,
+        0.55,
+        "Resumen orientativo generado por AutónomoFACIL. No sustituye el recibo oficial de salarios ni el boletín de cotización.",
+    );
+    p.texto(
+        MARGEN,
+        ALTO - 52.0,
+        7.0,
+        false,
+        0.55,
+        "No aplica las bases mínimas y máximas de cotización.",
+    );
+    p.texto_der(
+        DERECHA,
+        ALTO - 34.0,
+        7.0,
+        false,
+        0.55,
+        "Página 1 de 1",
+    );
+    ensamblar(vec![p.ops], None)
+}
+
 /// Genera el PDF completo de una factura o presupuesto.
 pub fn documento(doc: &Documento, empresa: &Empresa) -> Vec<u8> {
-    let titulo = match doc.tipo {
-        crate::model::TipoDoc::Factura => "FACTURA",
-        crate::model::TipoDoc::Presupuesto => "PRESUPUESTO",
-        crate::model::TipoDoc::Proforma => "FACTURA PROFORMA",
+    let titulo = if doc.es_rectificativa() {
+        "FACTURA RECTIFICATIVA"
+    } else {
+        match doc.tipo {
+            crate::model::TipoDoc::Factura => "FACTURA",
+            crate::model::TipoDoc::Presupuesto => "PRESUPUESTO",
+            crate::model::TipoDoc::Proforma => "FACTURA PROFORMA",
+        }
     };
 
-    let por_pagina = 19usize;
     let vacio: &[Linea] = &[];
+    // La primera página reserva sitio para el QR de cabecera; las siguientes
+    // mantienen el ritmo de 19 líneas.
+    let primera = if doc.verifactu.is_some() { 14 } else { 19 };
     let grupos: Vec<&[Linea]> = if doc.lineas.is_empty() {
         vec![vacio]
     } else {
-        doc.lineas.chunks(por_pagina).collect()
+        let corte = doc.lineas.len().min(primera);
+        let mut v = vec![&doc.lineas[..corte]];
+        v.extend(doc.lineas[corte..].chunks(19));
+        v
     };
     let total_paginas = grupos.len();
 
@@ -559,11 +776,57 @@ pub fn documento(doc: &Documento, empresa: &Empresa) -> Vec<u8> {
 
     for (i, grupo) in grupos.iter().enumerate() {
         let mut p = Pagina::nueva();
-        cabecera(&mut p, doc, empresa, titulo, logo.as_ref());
+        let con_qr = i == 0 && doc.verifactu.is_some();
+        let desplazamiento = if con_qr { QR_LADO + 22.0 } else { 0.0 };
+        if con_qr {
+            if let Some(reg) = &doc.verifactu {
+                qr_tributario(&mut p, reg);
+            }
+        }
+        cabecera(
+            &mut p,
+            doc,
+            empresa,
+            titulo,
+            logo.as_ref(),
+            desplazamiento,
+        );
 
-        let mut y = MARGEN + 74.0;
+        let mut y = MARGEN + 74.0 + desplazamiento;
         if i == 0 {
-            y = bloque_cliente(&mut p, doc, y) + 18.0;
+            y = bloque_cliente(&mut p, doc, y);
+            if let Some(r) = &doc.rectifica {
+                y += 12.0;
+                p.texto(
+                    MARGEN,
+                    y,
+                    8.0,
+                    false,
+                    0.4,
+                    &format!(
+                        "Rectifica la factura {} del {}.",
+                        if r.etiqueta.is_empty() {
+                            r.num_serie.as_str()
+                        } else {
+                            r.etiqueta.as_str()
+                        },
+                        r.fecha.format("%d/%m/%Y")
+                    ),
+                );
+                y += 10.0;
+                if !doc.motivo_rectificacion.trim().is_empty() {
+                    p.texto(
+                        MARGEN,
+                        y,
+                        8.0,
+                        false,
+                        0.4,
+                        &format!("Motivo: {}", doc.motivo_rectificacion),
+                    );
+                    y += 10.0;
+                }
+            }
+            y += 18.0;
         } else {
             p.texto(MARGEN, y, 9.0, true, 0.45, "CONTINUACIÓN");
             y += 18.0;
@@ -608,7 +871,7 @@ pub fn documento(doc: &Documento, empresa: &Empresa) -> Vec<u8> {
 
 /// Texto apto para un nombre de fichero en Windows: sin acentos, sin
 /// caracteres prohibidos y con guiones en vez de espacios.
-fn slug(texto: &str) -> String {
+pub(crate) fn slug(texto: &str) -> String {
     let mut salida = String::with_capacity(texto.len());
     let mut guion = false;
     for c in texto.chars() {
@@ -657,11 +920,18 @@ pub fn modelo(m: &crate::modelos::Modelo, empresa: &Empresa) -> Vec<u8> {
     }
 
     let por_pagina = 24usize;
-    let total = if filas.is_empty() {
+    let paginas_casillas = if filas.is_empty() {
         1
     } else {
         (filas.len() + por_pagina - 1) / por_pagina
     };
+    let por_pagina_detalle = 24usize;
+    let paginas_detalle = if m.detalle.is_empty() {
+        0
+    } else {
+        (m.detalle.len() + por_pagina_detalle - 1) / por_pagina_detalle
+    };
+    let total = paginas_casillas + paginas_detalle;
     let mut paginas = Vec::with_capacity(total);
 
     for i in 0..total {
@@ -701,27 +971,84 @@ pub fn modelo(m: &crate::modelos::Modelo, empresa: &Empresa) -> Vec<u8> {
         );
         p.texto_der(DERECHA, MARGEN + 84.0, 7.5, true, 0.45, "BORRADOR");
 
-        let mut y = MARGEN + 104.0;
-        p.texto(MARGEN, y, 7.0, true, 0.50, "CASILLA");
-        p.texto(MARGEN + 48.0, y, 7.0, true, 0.50, "CONCEPTO");
-        p.texto_der(DERECHA, y, 7.0, true, 0.50, "IMPORTE");
-        y += 5.0;
-        p.linea(MARGEN, y, DERECHA, y, 0.6, 0.55);
-        y += 16.0;
+        if i < paginas_casillas {
+            let mut y = MARGEN + 104.0;
+            p.texto(MARGEN, y, 7.0, true, 0.50, "CASILLA");
+            p.texto(MARGEN + 48.0, y, 7.0, true, 0.50, "CONCEPTO");
+            p.texto_der(DERECHA, y, 7.0, true, 0.50, "IMPORTE");
+            y += 5.0;
+            p.linea(MARGEN, y, DERECHA, y, 0.6, 0.55);
+            y += 16.0;
 
-        for (es_seccion, num, etq, valor) in filas.iter().skip(i * por_pagina).take(por_pagina) {
-            if *es_seccion {
-                p.rect(MARGEN, y - 10.0, DERECHA - MARGEN, 16.0, 0.95);
-                p.texto(MARGEN + 2.0, y, 8.5, true, 0.20, etq);
-                y += 20.0;
-            } else {
-                p.caja(MARGEN, y - 10.0, 38.0, 13.0, 0.5, 0.60);
-                p.texto(MARGEN + 4.0, y, 8.0, true, 0.25, num);
-                let recorte: String = etq.chars().take(70).collect();
-                p.texto(MARGEN + 48.0, y, 8.5, false, 0.20, &recorte);
-                p.texto_der(DERECHA, y, 8.5, true, 0.10, valor);
-                y += 16.0;
+            for (es_seccion, num, etq, valor) in filas.iter().skip(i * por_pagina).take(por_pagina) {
+                if *es_seccion {
+                    p.rect(MARGEN, y - 10.0, DERECHA - MARGEN, 16.0, 0.95);
+                    p.texto(MARGEN + 2.0, y, 8.5, true, 0.20, etq);
+                    y += 20.0;
+                } else {
+                    p.caja(MARGEN, y - 10.0, 38.0, 13.0, 0.5, 0.60);
+                    p.texto(MARGEN + 4.0, y, 8.0, true, 0.25, num);
+                    let recorte: String = etq.chars().take(70).collect();
+                    p.texto(MARGEN + 48.0, y, 8.5, false, 0.20, &recorte);
+                    p.texto_der(DERECHA, y, 8.5, true, 0.10, valor);
+                    y += 16.0;
+                }
             }
+        } else {
+            let pagina_detalle = i - paginas_casillas;
+            let total_nominas: usize = m.detalle.iter().map(|f| f.nominas).sum();
+            let mut y = MARGEN + 104.0;
+            p.texto(
+                MARGEN,
+                y,
+                11.0,
+                true,
+                0.10,
+                if m.codigo == "190" {
+                    "DETALLE ANUAL POR PERCEPTOR"
+                } else {
+                    "DETALLE DE NÓMINAS DEL TRIMESTRE"
+                },
+            );
+            y += 18.0;
+            p.texto(MARGEN, y, 7.0, true, 0.50, "NIF");
+            p.texto(MARGEN + 92.0, y, 7.0, true, 0.50, "PERCEPTOR");
+            p.texto_der(MARGEN + 360.0, y, 7.0, true, 0.50, "NÓMINAS");
+            p.texto_der(DERECHA - 60.0, y, 7.0, true, 0.50, "BASE");
+            p.texto_der(DERECHA, y, 7.0, true, 0.50, "RETENCIÓN");
+            y += 5.0;
+            p.linea(MARGEN, y, DERECHA, y, 0.6, 0.55);
+            y += 15.0;
+
+            let desde = pagina_detalle * por_pagina_detalle;
+            for (n, f) in m.detalle.iter().skip(desde).take(por_pagina_detalle).enumerate() {
+                if n % 2 == 1 {
+                    p.rect(MARGEN, y - 10.0, DERECHA - MARGEN, 15.0, 0.97);
+                }
+                p.texto(MARGEN, y, 8.5, false, 0.20, &f.nif.chars().take(16).collect::<String>());
+                p.texto(MARGEN + 92.0, y, 8.5, false, 0.20, &f.nombre.chars().take(38).collect::<String>());
+                p.texto_der(MARGEN + 360.0, y, 8.5, false, 0.20, &f.nominas.to_string());
+                p.texto_der(DERECHA - 60.0, y, 8.5, false, 0.20, &fmt_cents_eur(f.bruto_cents));
+                p.texto_der(DERECHA, y, 8.5, true, 0.10, &fmt_cents_eur(f.irpf_cents));
+                y += 15.0;
+            }
+            if pagina_detalle + 1 == paginas_detalle {
+                y += 6.0;
+                p.linea(MARGEN, y, DERECHA, y, 0.6, 0.40);
+                y += 12.0;
+                p.texto(MARGEN, y, 8.5, true, 0.20, "TOTAL");
+                p.texto_der(MARGEN + 360.0, y, 8.5, true, 0.20, &total_nominas.to_string());
+                p.texto_der(DERECHA - 60.0, y, 8.5, true, 0.20, &fmt_cents_eur(m.importe("02")));
+                p.texto_der(DERECHA, y, 8.5, true, 0.20, &fmt_cents_eur(m.importe("03")));
+            }
+            p.texto(
+                MARGEN,
+                ALTO - 110.0,
+                7.0,
+                false,
+                0.55,
+                "El detalle es informativo: no es una casilla oficial. Comprueba NIF y que cada perceptor coincida con sus nóminas.",
+            );
         }
 
         let pie_y = ALTO - 82.0;
@@ -766,10 +1093,14 @@ fn envolver(texto: &str, ancho: usize) -> Vec<String> {
 /// Nombre que dice qué es el fichero sin abrirlo:
 /// `Factura-2026-0042-agencia-creativa-sl-2026-11-10.pdf`.
 pub fn nombre_fichero(doc: &Documento) -> String {
-    let tipo = match doc.tipo {
-        crate::model::TipoDoc::Factura => "Factura",
-        crate::model::TipoDoc::Presupuesto => "Presupuesto",
-        crate::model::TipoDoc::Proforma => "Proforma",
+    let tipo = if doc.es_rectificativa() {
+        "Rectificativa"
+    } else {
+        match doc.tipo {
+            crate::model::TipoDoc::Factura => "Factura",
+            crate::model::TipoDoc::Presupuesto => "Presupuesto",
+            crate::model::TipoDoc::Proforma => "Proforma",
+        }
     };
     let numero = if doc.numero == 0 {
         format!("borrador-{}", doc.id)
@@ -797,7 +1128,7 @@ pub fn nombre_fichero(doc: &Documento) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{Cliente, Linea, TipoDoc};
+    use crate::model::{Cliente, Linea, Rectificacion, TipoDoc};
 
     fn doc() -> (Documento, Empresa) {
         let empresa = Empresa {
@@ -847,6 +1178,23 @@ mod tests {
     }
 
     #[test]
+    fn la_r1_se_titula_y_cita_la_factura_original() {
+        let (mut d, e) = doc();
+        d.rectifica = Some(Rectificacion {
+            documento_id: 7,
+            num_serie: d.num_serie_aeat(),
+            etiqueta: d.etiqueta_numero(),
+            fecha: d.fecha,
+            tipo: "I".to_string(),
+        });
+        d.motivo_rectificacion = "Descuento no aplicado".to_string();
+        let texto = String::from_utf8_lossy(&documento(&d, &e)).to_string();
+        assert!(texto.contains("FACTURA RECTIFICATIVA"));
+        assert!(texto.contains("Rectifica la factura 2026/0042 del"));
+        assert!(texto.contains("Motivo: Descuento no aplicado"));
+    }
+
+    #[test]
     fn los_acentos_sobreviven_al_pdf() {
         let (d, e) = doc();
         let bytes = documento(&d, &e);
@@ -872,6 +1220,10 @@ mod tests {
         );
         assert!(texto.contains("MODELO 303"));
         assert!(texto.contains("BORRADOR"));
+        assert!(
+            texto.contains("/Resources<</Font<</F1 3 0 R/F2 4 0 R>>>>/Contents"),
+            "las fuentes deben cerrar Resources antes de Contents"
+        );
     }
 
     #[test]
@@ -902,10 +1254,91 @@ mod tests {
     }
 
     #[test]
+    fn la_nomina_genera_un_resumen_con_neto_y_coste() {
+        let e = Empleado {
+            id: 1,
+            nombre: "Ana".into(),
+            apellidos: "García Ruiz".into(),
+            nif: "12345678Z".into(),
+            salario_bruto_anual_cents: 2_400_000,
+            irpf_pb: 1500,
+            ..Default::default()
+        };
+        let n = Nomina::calcular(&e, 2, 2026, 1);
+        let bytes = nomina(&n, &e, &Empresa::default());
+        assert!(bytes.starts_with(b"%PDF"));
+        assert!(bytes.ends_with(b"%%EOF\n"));
+        assert!(bytes.len() > 1_500);
+        let texto = String::from_utf8_lossy(&bytes);
+        assert!(texto.contains("RESUMEN DE N"));
+        assert!(texto.contains("BORRADOR"));
+        assert!(texto.contains("NETO A PERCIBIR"));
+        assert!(texto.contains("COSTE PARA LA EMPRESA"));
+        assert!(texto.contains("No aplica las bases"));
+    }
+
+    #[test]
+    fn el_pdf_de_retenciones_incluye_el_detalle_por_perceptor() {
+        use crate::empleados::{Empleado, Nomina};
+        let e = Empleado {
+            id: 3,
+            nombre: "Ana".into(),
+            apellidos: "García".into(),
+            nif: "12345678Z".into(),
+            salario_bruto_anual_cents: 2_400_000,
+            irpf_pb: 1500,
+            ..Default::default()
+        };
+        let mut db = crate::store::Db::default();
+        db.empleados.push(e.clone());
+        db.nominas.push(Nomina::calcular(&e, 1, 2026, 1));
+        db.nominas.push(Nomina::calcular(&e, 2, 2026, 2));
+
+        let trimestre = crate::modelos::retenciones_111(&db, 2026, 1);
+        let bytes = modelo(&trimestre, &Empresa::default());
+        assert!(bytes.starts_with(b"%PDF"));
+        let texto = String::from_utf8_lossy(&bytes);
+        assert!(texto.contains("DETALLE"));
+        assert!(texto.contains("12345678Z"));
+        assert!(texto.contains("/Count 2"));
+
+        let anual = crate::modelos::resumen_190(&db, 2026);
+        let texto = String::from_utf8_lossy(&modelo(&anual, &Empresa::default())).to_string();
+        assert!(texto.contains("DETALLE ANUAL POR PERCEPTOR"));
+        assert!(texto.contains("12345678Z"));
+    }
+
+    #[test]
+    fn el_qr_solo_aparece_en_la_primera_pagina() {
+        let (mut d, e) = doc();
+        d.verifactu = Some(crate::verifactu::registro_alta(&d, "B12345678", ""));
+        let texto = String::from_utf8_lossy(&documento(&d, &e)).to_string();
+        assert_eq!(
+            texto.matches("QR tributario:").count(),
+            1,
+            "el QR tributario debe figurar una sola vez"
+        );
+        assert!(
+            texto.contains("/Count 2"),
+            "25 líneas deben seguir ocupando dos páginas"
+        );
+    }
+
+    #[test]
     fn el_qr_aparece_cuando_hay_registro() {
         let (mut d, e) = doc();
         d.verifactu = Some(crate::verifactu::registro_alta(&d, "B12345678", ""));
-        let con = documento(&d, &e).len();
+        let con_bytes = documento(&d, &e);
+        let con_texto = String::from_utf8_lossy(&con_bytes);
+        assert!(
+            con_texto.contains("QR tributario:"),
+            "el QR debe llevar la etiqueta obligatoria"
+        );
+        assert!(
+            !con_texto.contains("Factura verificable"),
+            "un registro local no debe anunciarse como verificable"
+        );
+        let con = con_bytes.len();
         d.verifactu = None;
         let sin = documento(&d, &e).len();
         assert!(con > sin, "el QR debe añadir contenido al PDF");

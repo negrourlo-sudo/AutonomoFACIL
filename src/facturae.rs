@@ -67,9 +67,21 @@ fn direccion_esp(direccion: &str, cp: &str, ciudad: &str, provincia: &str, sangr
     )
 }
 
-/// Nombre del fichero: `2026-0042.xml`.
+/// Nombre del fichero: `facturae-2026-0042-agencia-creativa-s-l.xml`.
 pub fn nombre_fichero(doc: &Documento) -> String {
-    format!("facturae-{}-{:04}.xml", doc.serie, doc.numero)
+    let serie = crate::pdf::slug(&doc.serie);
+    let serie = if serie.is_empty() {
+        "sin-serie".to_string()
+    } else {
+        serie
+    };
+    let cliente = crate::pdf::slug(&doc.cliente.nombre_completo());
+    let cliente = if cliente.is_empty() {
+        "sin-cliente".to_string()
+    } else {
+        cliente
+    };
+    format!("facturae-{serie}-{:04}-{cliente}.xml", doc.numero)
 }
 
 pub fn generar(doc: &Documento, empresa: &Empresa) -> String {

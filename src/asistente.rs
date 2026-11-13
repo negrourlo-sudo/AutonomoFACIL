@@ -172,7 +172,7 @@ pub fn plan(p: &Perfil) -> Plan {
     }
     if p.verifactu {
         consejos.push(
-            "Con Verifactu activo, cada factura emitida guarda un registro encadenado y un QR verificable. Una factura emitida ya no se edita: se anula y se hace otra."
+            "Con Verifactu activo, cada factura emitida guarda un registro encadenado y un QR tributario de cotejo (no verificable). No se remite a la AEAT. Una factura emitida ya no se edita: se anula y se hace otra."
                 .to_string(),
         );
     }

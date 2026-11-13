@@ -262,7 +262,7 @@ const GUIA_111: Guia = Guia {
         "Presenta y guarda el justificante; el 190 resume el año.",
     ],
     fichero: "Admite fichero con el diseño de registro oficial, cómodo si hay muchos empleados; el formulario sirve para pocos.",
-    aviso: "Plazo: 1–20 del mes siguiente a cada trimestre. Si no hay nóminas ni retenciones, no se presenta.",
+    aviso: "Plazo: 1–20 del mes siguiente a cada trimestre. Este borrador de AutónomoFACIL sólo suma las nóminas generadas (casillas 01–03): no incluye facturas de profesionales, rentas en especie, regularizaciones ni otros pagos. Si no hay nóminas ni retenciones, no se presenta.",
 };
 
 const GUIA_115: Guia = Guia {
@@ -298,7 +298,7 @@ const GUIA_190: Guia = Guia {
         "Presenta y guarda el justificante antes del 31 de enero.",
     ],
     fichero: "Admite fichero TGVI con el diseño de registro anual.",
-    aviso: "Sólo si has presentado el 111. Un error aquí descuadra las rentas de tus empleados: revisa NIF y bases uno a uno.",
+    aviso: "Sólo si has presentado el 111. Este borrador se calcula con las nóminas generadas y su detalle por perceptor; no incluye facturas de profesionales, rentas en especie ni otras rentas. Revisa NIF, perceptores y que cuadre con los cuatro 111 del año.",
 };
 
 const GUIA_180: Guia = Guia {

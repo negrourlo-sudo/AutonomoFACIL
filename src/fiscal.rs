@@ -67,7 +67,7 @@ pub fn obligaciones_con(act: Actividad, empresa: &Empresa) -> Vec<Obligacion> {
     if empresa.sii {
         v.retain(|o| o.codigo != "390");
         if let Some(o) = v.iter_mut().find(|o| o.codigo == "303") {
-            o.plazo = "1–20 del mes siguiente (con SII, mensual)";
+            o.plazo = "Mensual: 1–20 del mes siguiente (30 de enero el de diciembre)";
             o.detalle = "Con SII el 303 es mensual y los libros se llevan en tiempo real; el 390 no se presenta.";
         }
     }
@@ -342,6 +342,84 @@ pub fn vence(codigo: &str, trimestral: bool, anyo: i32, tri: u32) -> Option<chro
     }
 }
 
+/// El «por qué» de cada modelo para este perfil concreto: la razón práctica
+/// por la que le toca, no la norma completa. Es lo que se pinta en la tarjeta
+/// para que nadie tenga que adivinar de dónde sale.
+pub fn motivo(e: &Empresa, codigo: &str) -> &'static str {
+    match codigo {
+        "303" => {
+            if e.sii {
+                "Porque repercutes IVA y, con SII, lo liquidas cada mes: 1–20 del mes siguiente."
+            } else {
+                "Porque repercutes IVA a tus clientes e ingresas la diferencia con el IVA de tus gastos."
+            }
+        }
+        "130" => {
+            "Porque eres autónomo persona física y adelantas el 20 % del beneficio; las retenciones y lo ya pagado se restan."
+        }
+        "131" => {
+            "Porque eres autónomo en estimación objetiva: el pago a cuenta se calcula por módulos, no por tus facturas."
+        }
+        "100" => {
+            "Porque la Renta es personal: la presenta la persona física, no la sociedad."
+        }
+        "200" => {
+            "Porque es una sociedad: tributa por el Impuesto de Sociedades sobre el beneficio, no por el IRPF."
+        }
+        "202" => {
+            "Porque una sociedad adelanta el Impuesto de Sociedades tres veces al año: abril, octubre y diciembre."
+        }
+        "390" => {
+            if e.sii {
+                "Con SII no se presenta: el resumen anual de IVA va dentro del propio SII."
+            } else {
+                "Porque resume el IVA del año entero, aunque ya hayas presentado los cuatro 303."
+            }
+        }
+        "347" => {
+            "Porque con un mismo cliente o proveedor superaste 3.005,06 € con IVA en el año."
+        }
+        "349" => {
+            "Porque facturas o compras a empresas de la UE con NIF-IVA; los particulares no entran."
+        }
+        "111" => "Porque tienes empleados o pagas retenciones a profesionales.",
+        "190" => {
+            "Porque resume el año de las retenciones que ya declaraste en los 111."
+        }
+        "115" => "Porque pagas alquiler de local y retienes el 19 % al arrendador.",
+        "180" => {
+            "Porque resume el año de las retenciones del alquiler declaradas en los 115."
+        }
+        "309" => {
+            "Porque en recargo de equivalencia hay operaciones (UE, ISP o inmuebles) que no caben en el 303."
+        }
+        "369" => {
+            "Porque vendes a particulares de la UE por encima de 10.000 € al año y liquidas el IVA de cada país."
+        }
+        "035" => {
+            "Porque es el alta obligatoria en la ventanilla única antes de presentar el 369."
+        }
+        _ => "Está en la lista por tu actividad y régimen; revisa si te aplica antes de marcarlo.",
+    }
+}
+
+/// ¿Este modelo se presenta cada mes? El 303 con SII, sí. El 130/131 sigue
+/// siendo trimestral aunque la empresa esté en SII.
+pub fn es_mensual(db: &Db, ob: &Obligacion) -> bool {
+    db.empresa.sii && ob.codigo == "303"
+}
+
+/// Vencimiento del 303 mensual: día 20 del mes siguiente; el de diciembre,
+/// el 30 de enero del año siguiente.
+pub fn vence_mes(anyo: i32, mes: u32) -> Option<chrono::NaiveDate> {
+    let f = |y: i32, m: u32, d: u32| chrono::NaiveDate::from_ymd_opt(y, m, d);
+    match mes {
+        1..=11 => f(anyo, mes + 1, 20),
+        12 => f(anyo + 1, 1, 30),
+        _ => None,
+    }
+}
+
 /// Próximo plazo pendiente de una obligación: (periodo, fecha, días que
 /// faltan). Si todos los plazos del año ya pasaron, devuelve el más antiguo
 /// con días negativos para poder avisar de que está sin presentar.
@@ -352,7 +430,17 @@ pub fn proximo_plazo(
     hoy: chrono::NaiveDate,
 ) -> Option<(String, chrono::NaiveDate, i64)> {
     let mut pendientes: Vec<(String, chrono::NaiveDate)> = Vec::new();
-    if ob.trimestral {
+    if es_mensual(db, ob) {
+        for m in 1..=12u32 {
+            let clave = format!("{anyo}-{}-{m:02}M", ob.codigo);
+            if esta_presentado(db, &clave) {
+                continue;
+            }
+            if let Some(f) = vence_mes(anyo, m) {
+                pendientes.push((format!("{anyo} · {m:02}M"), f));
+            }
+        }
+    } else if ob.trimestral {
         for q in 1..=4u32 {
             let clave = format!("{anyo}-{}-{q}T", ob.codigo);
             if esta_presentado(db, &clave) {
@@ -567,6 +655,60 @@ mod tests {
         assert!(textos.contains("ROI"), "{textos}");
         assert!(textos.contains("Resumen"), "{textos}");
         assert!(textos.contains("130") && textos.contains("200"), "{textos}");
+    }
+
+    #[test]
+    fn el_motivo_explica_el_porque_segun_el_perfil() {
+        let mut e = Empresa::default();
+        assert!(motivo(&e, "130").contains("autónomo"));
+        assert!(motivo(&e, "100").contains("personal"));
+
+        e.persona_fisica = false;
+        assert!(motivo(&e, "200").contains("sociedad"));
+        assert!(motivo(&e, "202").contains("tres veces"));
+
+        let mut sii = Empresa::default();
+        sii.sii = true;
+        assert!(motivo(&sii, "303").contains("cada mes"));
+        assert!(motivo(&sii, "390").contains("SII"));
+
+        let mut recargo = Empresa::default();
+        recargo.recargo_equivalencia = true;
+        assert!(motivo(&recargo, "309").contains("recargo"));
+    }
+
+    #[test]
+    fn con_sii_el_303_es_mensual_y_el_130_no() {
+        let mut db = Db::default();
+        db.empresa.sii = true;
+        let obs = obligaciones_con(Actividad::Servicios, &db.empresa);
+        let ob303 = obs.iter().find(|o| o.codigo == "303").unwrap();
+        assert!(ob303.plazo.starts_with("Mensual"), "{}", ob303.plazo);
+        assert!(es_mensual(&db, ob303));
+
+        let hoy = NaiveDate::from_ymd_opt(2026, 4, 1).unwrap();
+        // El 1 de abril aún está pendiente el 303 de marzo (vence el 20 de abril).
+        let (periodo, fecha, dias) = proximo_plazo(&db, ob303, 2026, hoy).unwrap();
+        assert_eq!(periodo, "2026 · 03M");
+        assert_eq!(fecha, NaiveDate::from_ymd_opt(2026, 4, 20).unwrap());
+        assert_eq!(dias, 19);
+
+        // Marcar marzo hace que el siguiente sea abril, no el 2T.
+        alternar(&mut db, "2026-303-03M");
+        let (periodo, _, _) = proximo_plazo(&db, ob303, 2026, hoy).unwrap();
+        assert_eq!(periodo, "2026 · 04M");
+
+        // El 130 de una persona física sigue siendo trimestral.
+        let ob130 = obs.iter().find(|o| o.codigo == "130").unwrap();
+        assert!(!es_mensual(&db, ob130));
+        let (periodo, _, _) = proximo_plazo(&db, ob130, 2026, hoy).unwrap();
+        assert_eq!(periodo, "2026 · 1T");
+
+        // Diciembre vence el 30 de enero del año siguiente.
+        assert_eq!(
+            vence_mes(2026, 12),
+            NaiveDate::from_ymd_opt(2027, 1, 30)
+        );
     }
 
     #[test]

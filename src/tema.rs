@@ -76,6 +76,9 @@ pub fn aplicar_estilo(estilo: &mut egui::Style) {
     w.open.rounding = egui::Rounding::same(8.0);
 
     estilo.visuals = v;
+    // Los tooltips de egui se desvanecen con esta duración. El perfil de
+    // rendimiento puede acortarla o desactivarla en equipos muy modestos.
+    estilo.animation_time = 0.16;
     estilo.spacing.item_spacing = egui::vec2(8.0, 7.0);
     estilo.spacing.button_padding = egui::vec2(12.0, 6.0);
     estilo.spacing.interact_size = egui::vec2(40.0, 28.0);
@@ -113,11 +116,129 @@ pub fn kpi(ui: &mut egui::Ui, etiqueta: &str, valor: &str, tono: Color32) {
     tarjeta(ui, |ui| {
         ui.set_min_width(148.0);
         ui.vertical(|ui| {
+            ui.set_min_height(45.0);
             ui.label(RichText::new(etiqueta).size(11.0).color(SUAVE));
             ui.add_space(3.0);
             ui.label(RichText::new(valor).size(20.0).strong().color(tono));
         });
     });
+}
+
+/// Igual que `kpi`, pero con un icono de ayuda junto a la etiqueta. Se usa en
+/// las cifras que necesitan una explicación (IVA, IRPF, cadena Verifactu…).
+pub fn kpi_ayuda(
+    ui: &mut egui::Ui,
+    etiqueta: &str,
+    valor: &str,
+    tono: Color32,
+    texto: &str,
+) {
+    tarjeta(ui, |ui| {
+        ui.set_min_width(148.0);
+        ui.vertical(|ui| {
+            ui.set_min_height(45.0);
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 3.0;
+                ui.label(RichText::new(etiqueta).size(11.0).color(SUAVE))
+                    .on_hover_ui(|ui| ayuda_emergente(ui, etiqueta, texto));
+                icono_ayuda(ui, etiqueta, texto);
+            });
+            ui.add_space(3.0);
+            ui.label(RichText::new(valor).size(20.0).strong().color(tono));
+        });
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Ayuda contextual
+// ---------------------------------------------------------------------------
+
+/// Icono «?» pequeño y consistente en toda la app. Al pasar el ratón muestra
+/// una tarjeta de ayuda; egui la desvanece al salir, sin dejar ventanas
+/// flotantes abiertas.
+pub fn icono_ayuda(ui: &mut egui::Ui, titulo: &str, texto: &str) -> Response {
+    let (rect, respuesta) = ui.allocate_exact_size(egui::vec2(18.0, 18.0), egui::Sense::hover());
+    let centro = rect.center();
+    let hovered = respuesta.hovered();
+    {
+        let pintor = ui.painter();
+        if hovered {
+            pintor.circle_filled(centro, 8.5, ACENTO);
+            pintor.text(
+                centro,
+                egui::Align2::CENTER_CENTER,
+                "?",
+                egui::FontId::proportional(11.0),
+                Color32::WHITE,
+            );
+        } else {
+            pintor.circle_filled(centro, 8.5, ACENTO_CLARO);
+            pintor.circle_stroke(
+                centro,
+                8.5,
+                Stroke::new(1.0_f32, Color32::from_rgb(0xC6, 0xD4, 0xF2)),
+            );
+            pintor.text(
+                centro,
+                egui::Align2::CENTER_CENTER,
+                "?",
+                egui::FontId::proportional(11.0),
+                ACENTO,
+            );
+        }
+    }
+    if hovered {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Help);
+    }
+    respuesta.on_hover_ui(|ui| ayuda_emergente(ui, titulo, texto))
+}
+
+/// Contenido de la tarjeta de ayuda. El marco redondeado y la sombra los pone
+/// el tooltip de egui; aquí sólo se cuida la jerarquía y el ancho de lectura.
+pub fn ayuda_emergente(ui: &mut egui::Ui, titulo: &str, texto: &str) {
+    ui.set_max_width(310.0);
+    ui.spacing_mut().item_spacing.y = 4.0;
+    ui.label(RichText::new("AYUDA").size(9.0).strong().color(ACENTO));
+    ui.label(
+        RichText::new(titulo)
+            .size(13.0)
+            .strong()
+            .color(TEXTO),
+    );
+    ui.add_space(1.0);
+    ui.separator();
+    ui.add_space(2.0);
+    ui.label(RichText::new(texto).size(11.5).color(SUAVE));
+}
+
+/// Etiqueta de formulario con su icono de ayuda al lado. Mantiene el mismo
+/// tamaño y color que el resto de etiquetas para no romper las rejillas.
+pub fn etiqueta_ayuda(ui: &mut egui::Ui, etiqueta: &str, texto: &str) {
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 3.0;
+        ui.label(RichText::new(etiqueta).size(12.0).color(SUAVE))
+            .on_hover_ui(|ui| ayuda_emergente(ui, etiqueta, texto));
+        icono_ayuda(ui, etiqueta, texto);
+    });
+}
+
+/// Casilla con su icono de ayuda. La casilla sigue siendo clicable; el icono
+/// sólo añade la explicación al pasar el ratón por encima.
+pub fn checkbox_ayuda(
+    ui: &mut egui::Ui,
+    checked: &mut bool,
+    texto: &str,
+    ayuda: &str,
+) -> Response {
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing.x = 3.0;
+        let respuesta = ui
+            .checkbox(checked, texto)
+            .on_hover_ui(|ui| ayuda_emergente(ui, texto, ayuda));
+        icono_ayuda(ui, texto, ayuda);
+        respuesta
+    })
+    .inner
 }
 
 /// Etiqueta de estado en forma de píldora.
@@ -159,9 +280,15 @@ pub fn boton_suave(ui: &mut egui::Ui, texto: &str) -> Response {
     )
 }
 
-/// Título de pantalla con subtítulo opcional.
-pub fn titulo(ui: &mut egui::Ui, texto: &str, sub: &str) {
-    ui.label(RichText::new(texto).size(24.0).strong().color(TEXTO));
+/// Título de pantalla con un icono de ayuda al lado. Sirve para explicar de un
+/// vistazo qué hace cada pantalla sin añadir párrafos permanentes.
+pub fn titulo_ayuda(ui: &mut egui::Ui, texto: &str, sub: &str, ayuda: &str) {
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 6.0;
+        ui.label(RichText::new(texto).size(24.0).strong().color(TEXTO))
+            .on_hover_ui(|ui| ayuda_emergente(ui, texto, ayuda));
+        icono_ayuda(ui, texto, ayuda);
+    });
     if !sub.is_empty() {
         ui.label(RichText::new(sub).size(12.0).color(SUAVE));
     }
