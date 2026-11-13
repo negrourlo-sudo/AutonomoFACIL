@@ -5,9 +5,11 @@
 //! partir de lo que ya hay en la app —las facturas emitidas— y de los gastos
 //! que se registran aquí.
 //!
-//! Criterio de devengo: se cuenta por la **fecha de la factura o del gasto**,
-//! que es el que se usa en esos modelos, no por la fecha de cobro.
+//! Criterio de devengo: se cuenta por la **fecha de la factura, del gasto o
+//! del mes de la nómina**, que es el que se usa en esos modelos, no por la
+//! fecha de cobro.
 
+use crate::empleados::Nomina;
 use crate::model::*;
 use crate::store::Db;
 use chrono::{Datelike, NaiveDate};
@@ -22,6 +24,10 @@ pub fn en_rango(fecha: NaiveDate, anyo: i32, trimestre: u32) -> bool {
     fecha.year() == anyo && (trimestre == 0 || self::trimestre(fecha) == trimestre)
 }
 
+fn nomina_en_rango(n: &Nomina, anyo: i32, trimestre: u32) -> bool {
+    n.anyo == anyo && (trimestre == 0 || n.trimestre() == trimestre)
+}
+
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Resumen {
     /// Base imponible de las facturas emitidas (sin IVA ni retenciones).
@@ -29,12 +35,17 @@ pub struct Resumen {
     pub iva_repercutido: i64,
     /// IRPF que los clientes han retenido al emitir la factura.
     pub retenido_por_clientes: i64,
-    /// Base imponible de los gastos (sin IVA ni retenciones).
+    /// Gastos sin IVA: gastos manuales más el coste de personal de las
+    /// nóminas. Los pagos bancarios marcados como personal no se suman aquí.
     pub gastos: i64,
+    /// Parte de `gastos` que corresponde al coste de empresa de las nóminas.
+    pub gastos_personal: i64,
     pub iva_soportado: i64,
     pub retenido_a_proveedores: i64,
     pub n_facturas: usize,
     pub n_gastos: usize,
+    /// Nóminas incluidas en el coste de personal.
+    pub n_nominas: usize,
 }
 
 impl Resumen {
@@ -76,13 +87,24 @@ pub fn resumen(db: &Db, anyo: i32, tri: u32) -> Resumen {
     }
 
     for g in &db.gastos {
-        if !en_rango(g.fecha, anyo, tri) {
+        if !en_rango(g.fecha, anyo, tri) || g.es_pago_personal() {
             continue;
         }
         r.gastos += g.base_cents;
         r.iva_soportado += g.cuota_iva();
         r.retenido_a_proveedores += g.retencion();
         r.n_gastos += 1;
+    }
+
+    // El coste de empresa de la nómina (bruto + SS de la empresa) es el gasto
+    // deducible de personal. Se cuenta por devengo, aunque aún no esté pagada.
+    for n in &db.nominas {
+        if !nomina_en_rango(n, anyo, tri) {
+            continue;
+        }
+        r.gastos += n.coste_empresa_cents;
+        r.gastos_personal += n.coste_empresa_cents;
+        r.n_nominas += 1;
     }
 
     r
@@ -133,7 +155,7 @@ pub fn csv_libro(db: &Db, anyo: i32) -> String {
     }
 
     for g in &db.gastos {
-        if g.fecha.year() != anyo {
+        if g.fecha.year() != anyo || g.es_pago_personal() {
             continue;
         }
         filas.push((
@@ -150,6 +172,41 @@ pub fn csv_libro(db: &Db, anyo: i32) -> String {
                 fmt_cents(g.cuota_iva()),
                 fmt_cents(g.retencion()),
                 fmt_cents(g.total()),
+            ),
+        ));
+    }
+
+    // El coste de personal se añade como un apunte propio del libro. El pago
+    // bancario marcado como personal no se duplica.
+    for n in &db.nominas {
+        if n.anyo != anyo {
+            continue;
+        }
+        let empleado = db.empleados.iter().find(|e| e.id == n.empleado_id);
+        let nombre = if !n.empleado_nombre.trim().is_empty() {
+            n.empleado_nombre.clone()
+        } else {
+            empleado
+                .map(|e| e.nombre_completo())
+                .unwrap_or_else(|| "Trabajador".to_string())
+        };
+        let nif = if !n.empleado_nif.trim().is_empty() {
+            n.empleado_nif.clone()
+        } else {
+            empleado.map(|e| e.nif.clone()).unwrap_or_default()
+        };
+        let fecha = NaiveDate::from_ymd_opt(n.anyo, n.mes, 1).unwrap_or_default();
+        filas.push((
+            fecha,
+            format!(
+                "Personal;{};{};{};{};{};{};0;0;0;{}",
+                fecha.format("%d/%m/%Y"),
+                format!("Nómina {:02}/{}", n.mes, n.anyo),
+                limpia(&nif),
+                limpia(&nombre),
+                "Coste de personal",
+                fmt_cents(n.coste_empresa_cents),
+                fmt_cents(n.coste_empresa_cents),
             ),
         ));
     }
@@ -181,6 +238,10 @@ pub fn informe_anual(db: &Db, anyo: i32) -> String {
     s.push_str("AÑO COMPLETO\n");
     s.push_str(&format!("  Ingresos (base)      {:>15}\n", fmt_cents(anual.ingresos)));
     s.push_str(&format!("  Gastos (base)        {:>15}\n", fmt_cents(anual.gastos)));
+    s.push_str(&format!(
+        "  · de personal        {:>15}\n",
+        fmt_cents(anual.gastos_personal)
+    ));
     s.push_str(&format!("  Resultado            {:>15}\n", fmt_cents(anual.resultado())));
     s.push_str(&format!(
         "  IVA repercutido      {:>15}\n",
@@ -200,6 +261,7 @@ pub fn informe_anual(db: &Db, anyo: i32) -> String {
     ));
     s.push_str(&format!("  Facturas emitidas    {}\n", anual.n_facturas));
     s.push_str(&format!("  Gastos registrados   {}\n", anual.n_gastos));
+    s.push_str(&format!("  Nóminas incluidas    {}\n", anual.n_nominas));
 
     for tri in 1..=4 {
         let r = resumen(db, anyo, tri);
@@ -247,7 +309,7 @@ pub fn gastos_por_categoria(db: &Db, anyo: i32, tri: u32) -> Vec<(String, i64, u
     use std::collections::BTreeMap;
     let mut m: BTreeMap<String, (i64, usize)> = BTreeMap::new();
     for g in &db.gastos {
-        if !en_rango(g.fecha, anyo, tri) {
+        if !en_rango(g.fecha, anyo, tri) || g.es_pago_personal() {
             continue;
         }
         let clave = if g.categoria.trim().is_empty() {
@@ -258,6 +320,17 @@ pub fn gastos_por_categoria(db: &Db, anyo: i32, tri: u32) -> Vec<(String, i64, u
         let e = m.entry(clave).or_insert((0, 0));
         e.0 += g.base_cents;
         e.1 += 1;
+    }
+    let mut personal = 0i64;
+    let mut n_personal = 0usize;
+    for n in &db.nominas {
+        if nomina_en_rango(n, anyo, tri) {
+            personal += n.coste_empresa_cents;
+            n_personal += 1;
+        }
+    }
+    if n_personal > 0 {
+        m.insert("Personal (nóminas)".to_string(), (personal, n_personal));
     }
     let mut v: Vec<(String, i64, usize)> = m
         .into_iter()
@@ -294,7 +367,7 @@ pub fn desglose_iva(db: &Db, anyo: i32, tri: u32) -> (Vec<TipoIva>, Vec<TipoIva>
     }
     let mut sop: BTreeMap<i32, (i64, i64)> = BTreeMap::new();
     for g in &db.gastos {
-        if !en_rango(g.fecha, anyo, tri) {
+        if !en_rango(g.fecha, anyo, tri) || g.es_pago_personal() {
             continue;
         }
         let e = sop.entry(g.iva_pb).or_insert((0, 0));
@@ -313,7 +386,10 @@ pub fn desglose_iva(db: &Db, anyo: i32, tri: u32) -> (Vec<TipoIva>, Vec<TipoIva>
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Acumulado {
     pub ingresos: i64,
+    /// Gastos deducibles acumulados, incluido el coste de personal.
     pub gastos: i64,
+    /// Parte de `gastos` correspondiente a las nóminas.
+    pub gastos_personal: i64,
     pub retenciones: i64,
     pub cuota: i64,
 }
@@ -333,10 +409,17 @@ pub fn acumulado_130(db: &Db, anyo: i32, hasta: u32) -> Acumulado {
         a.retenciones += t.retencion;
     }
     for g in &db.gastos {
-        if g.fecha.year() != anyo || trimestre(g.fecha) > tope {
+        if g.fecha.year() != anyo || trimestre(g.fecha) > tope || g.es_pago_personal() {
             continue;
         }
         a.gastos += g.base_cents;
+    }
+    for n in &db.nominas {
+        if n.anyo != anyo || n.trimestre() > tope {
+            continue;
+        }
+        a.gastos += n.coste_empresa_cents;
+        a.gastos_personal += n.coste_empresa_cents;
     }
     let rendimiento = a.ingresos - a.gastos;
     a.cuota = (div_round(rendimiento * 2000, 10_000) - a.retenciones).max(0);
@@ -381,7 +464,7 @@ pub fn modelo_347(db: &Db, anyo: i32) -> Vec<Operacion347> {
     }
 
     for g in &db.gastos {
-        if g.fecha.year() != anyo {
+        if g.fecha.year() != anyo || g.es_pago_personal() {
             continue;
         }
         let nif = g.nif.trim().to_uppercase();
@@ -466,7 +549,22 @@ pub fn rentabilidad_clientes(db: &Db, anyo: i32, tri: u32) -> Vec<Rentabilidad> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::empleados::{Empleado, Nomina};
     use crate::model::{Cliente, Documento, Empresa, Estado, Linea, TipoDoc};
+
+    fn nomina(id: u64, anyo: i32, mes: u32) -> Nomina {
+        let empleado = Empleado {
+            id: 1,
+            nombre: "Ana".into(),
+            apellidos: "García".into(),
+            nif: "12345678Z".into(),
+            fecha_alta: NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
+            salario_bruto_anual_cents: 2_400_000,
+            irpf_pb: 1500,
+            ..Default::default()
+        };
+        Nomina::calcular(&empleado, id, anyo, mes)
+    }
 
     fn factura(fecha: NaiveDate, base: i64, iva: i32, irpf: i32) -> Documento {
         let cliente = Cliente {
@@ -550,6 +648,93 @@ mod tests {
         assert_eq!(r.iva_soportado, 2_100);
         assert_eq!(r.iva_a_ingresar(), -2_100);
         assert_eq!(r.resultado(), -10_000);
+    }
+
+    #[test]
+    fn el_personal_entra_en_contabilidad_y_en_el_130_sin_duplicar_pagos() {
+        let mut db = Db::default();
+        db.documentos.push(factura(
+            NaiveDate::from_ymd_opt(2026, 2, 10).unwrap(),
+            500_000,
+            2100,
+            0,
+        ));
+        let n = nomina(10, 2026, 1);
+        let coste = n.coste_empresa_cents;
+        db.nominas.push(n);
+        // Pago bancario marcado explícitamente: no debe sumarse otra vez.
+        db.gastos.push(Gasto {
+            id: 2,
+            fecha: NaiveDate::from_ymd_opt(2026, 1, 31).unwrap(),
+            proveedor: "Banco".into(),
+            base_cents: 157_040,
+            pago_personal: true,
+            ..Default::default()
+        });
+        // Un pago antiguo que sólo se reconoce por la categoría.
+        db.gastos.push(Gasto {
+            id: 3,
+            fecha: NaiveDate::from_ymd_opt(2026, 2, 1).unwrap(),
+            proveedor: "Banco".into(),
+            base_cents: 157_040,
+            categoria: "Nóminas".into(),
+            ..Default::default()
+        });
+        db.gastos.push(Gasto {
+            id: 4,
+            fecha: NaiveDate::from_ymd_opt(2026, 2, 2).unwrap(),
+            proveedor: "Papelería".into(),
+            base_cents: 10_000,
+            iva_pb: 2100,
+            ..Default::default()
+        });
+
+        let r = resumen(&db, 2026, 1);
+        assert_eq!(r.gastos, coste + 10_000);
+        assert_eq!(r.gastos_personal, coste);
+        assert_eq!(r.n_gastos, 1);
+        assert_eq!(r.n_nominas, 1);
+        assert_eq!(r.iva_soportado, 2_100);
+        assert_eq!(r.resultado(), 500_000 - coste - 10_000);
+
+        let a = acumulado_130(&db, 2026, 1);
+        assert_eq!(a.gastos, coste + 10_000);
+        assert_eq!(a.gastos_personal, coste);
+        let esperado = div_round((500_000 - coste - 10_000) * 2000, 10_000);
+        assert_eq!(a.cuota, esperado);
+        assert_eq!(r.irpf_130(), esperado);
+
+        let categorias = gastos_por_categoria(&db, 2026, 1);
+        assert!(categorias
+            .iter()
+            .any(|(c, base, n)| c == "Personal (nóminas)" && *base == coste && *n == 1));
+        let csv = csv_libro(&db, 2026);
+        assert!(csv.contains("Personal;"));
+        assert!(csv.contains("Coste de personal"));
+        assert!(!csv.contains("Banco"));
+    }
+
+    #[test]
+    fn el_347_ignora_los_pagos_de_personal() {
+        let mut db = Db::default();
+        db.gastos.push(Gasto {
+            id: 1,
+            fecha: NaiveDate::from_ymd_opt(2026, 2, 1).unwrap(),
+            proveedor: "Banco".into(),
+            nif: "B12345678".into(),
+            base_cents: 400_000,
+            categoria: "Nóminas".into(),
+            ..Default::default()
+        });
+        db.gastos.push(Gasto {
+            id: 2,
+            fecha: NaiveDate::from_ymd_opt(2026, 2, 2).unwrap(),
+            proveedor: "Banco".into(),
+            nif: "B12345678".into(),
+            base_cents: 100_000,
+            ..Default::default()
+        });
+        assert!(modelo_347(&db, 2026).is_empty());
     }
 
     #[test]

@@ -359,7 +359,7 @@ pub fn iva_303(db: &Db, anyo: i32, tri: u32) -> Modelo {
     let mut base_sop = 0i64;
     let mut cuota_sop = 0i64;
     for g in &db.gastos {
-        if g.fecha < ini || g.fecha > fin {
+        if g.fecha < ini || g.fecha > fin || g.es_pago_personal() {
             continue;
         }
         base_sop += g.base_cents;
@@ -689,7 +689,7 @@ pub fn retenciones_111(db: &Db, anyo: i32, tri: u32) -> Modelo {
         titulo: "Retenciones de nóminas · autoliquidación trimestral",
         periodo: etiqueta_periodo(anyo, tri),
         secciones: vec![seccion("Rendimientos del trabajo", casillas)],
-        nota: "Borrador calculado SÓLO con las nóminas generadas. No incluye facturas de profesionales (casillas 07-09), retribuciones en especie, regularizaciones, atrasos ni otras rentas. Revisa NIF y bases antes de presentar.",
+        nota: "Borrador calculado SÓLO con las nóminas generadas. La base del 111 es el bruto de cada nómina, no la base de cotización. No incluye facturas de profesionales (casillas 07-09), retribuciones en especie, regularizaciones, atrasos ni otras rentas. Revisa NIF, perceptores y retenciones antes de presentar.",
         detalle,
     }
 }
@@ -736,7 +736,7 @@ pub fn resumen_190(db: &Db, anyo: i32) -> Modelo {
         titulo: "Retenciones de nóminas · resumen anual",
         periodo: etiqueta_periodo(anyo, 0),
         secciones: vec![seccion("Resumen de la declaración", casillas)],
-        nota: "Borrador calculado SÓLO con las nóminas generadas. No incluye facturas de profesionales, rentas en especie, regularizaciones ni otras rentas. Cada perceptor debe tener un NIF válido y los totales deben cuadrar con los cuatro 111 del año.",
+        nota: "Borrador calculado SÓLO con las nóminas generadas. Usa percepciones íntegras (bruto) e IRPF, no la base de cotización. No incluye facturas de profesionales, rentas en especie, regularizaciones ni otras rentas. Cada perceptor debe tener un NIF válido y los totales deben cuadrar con los cuatro 111 del año.",
         detalle,
     }
 }
@@ -918,7 +918,7 @@ pub fn fraccionado_130(db: &Db, anyo: i32, tri: u32) -> Modelo {
                 ),
                 c(
                     "02",
-                    "Gastos fiscalmente deducibles acumulados",
+                    "Gastos deducibles acumulados (incluye personal)",
                     Valor::Dinero(a.gastos),
                 ),
                 c(
@@ -1038,7 +1038,11 @@ pub fn avisos(m: &Modelo, db: &Db, anyo: i32, tri: u32) -> Vec<String> {
             let sin_nif = db
                 .gastos
                 .iter()
-                .filter(|g| g.fecha.year() == anyo && g.nif.trim().is_empty())
+                .filter(|g| {
+                    g.fecha.year() == anyo
+                        && !g.es_pago_personal()
+                        && g.nif.trim().is_empty()
+                })
                 .count();
             if sin_nif > 0 {
                 v.push(format!(
@@ -1180,6 +1184,79 @@ mod tests {
         assert_eq!(m.importe("27"), 0);
         assert_eq!(m.importe("69"), 0);
         assert!(!m.resumen().is_empty());
+    }
+
+    #[test]
+    fn el_303_no_deduce_el_pago_bancario_de_nominas() {
+        let mut db = Db::default();
+        db.gastos.push(Gasto {
+            id: 1,
+            fecha: dia(2026, 2, 1),
+            base_cents: 100_000,
+            iva_pb: 2100,
+            pago_personal: true,
+            ..Default::default()
+        });
+        db.gastos.push(Gasto {
+            id: 2,
+            fecha: dia(2026, 2, 2),
+            base_cents: 1_000,
+            iva_pb: 2100,
+            ..Default::default()
+        });
+
+        let m = iva_303(&db, 2026, 1);
+        assert_eq!(m.importe("28"), 1_000);
+        assert_eq!(m.importe("29"), 210);
+    }
+
+    #[test]
+    fn el_130_incluye_el_coste_de_personal_sin_duplicar_el_pago() {
+        use crate::empleados::{Empleado, Nomina};
+        let mut db = Db::default();
+        db.documentos.push(factura(
+            "B1",
+            "Cliente",
+            dia(2026, 2, 10),
+            TipoOperacion::Nacional,
+            2100,
+            500_000,
+        ));
+        let empleado = Empleado {
+            id: 1,
+            nombre: "Ana".into(),
+            apellidos: "García".into(),
+            nif: "12345678Z".into(),
+            fecha_alta: dia(2026, 1, 1),
+            salario_bruto_anual_cents: 2_400_000,
+            irpf_pb: 1500,
+            ..Default::default()
+        };
+        let n = Nomina::calcular(&empleado, 10, 2026, 1);
+        let coste = n.coste_empresa_cents;
+        db.nominas.push(n);
+        db.gastos.push(Gasto {
+            id: 2,
+            fecha: dia(2026, 1, 31),
+            base_cents: 157_040,
+            pago_personal: true,
+            ..Default::default()
+        });
+        db.gastos.push(Gasto {
+            id: 3,
+            fecha: dia(2026, 2, 2),
+            base_cents: 10_000,
+            iva_pb: 2100,
+            ..Default::default()
+        });
+
+        let m = fraccionado_130(&db, 2026, 1);
+        assert_eq!(m.importe("02"), coste + 10_000);
+        assert_eq!(m.importe("03"), 500_000 - coste - 10_000);
+        assert_eq!(
+            m.importe("04"),
+            div_round((500_000 - coste - 10_000) * 2000, 10_000)
+        );
     }
 
     #[test]
@@ -1401,6 +1478,7 @@ mod tests {
             nombre: "Ana".into(),
             apellidos: "García".into(),
             nif: "12345678Z".into(),
+            fecha_alta: dia(2026, 1, 1),
             tipo_contrato: TipoContrato::Indefinido,
             salario_bruto_anual_cents: 2_400_000,
             irpf_pb: 1500,
@@ -1411,6 +1489,7 @@ mod tests {
             nombre: "Luis".into(),
             apellidos: "Pérez".into(),
             nif: "87654321X".into(),
+            fecha_alta: dia(2026, 1, 1),
             tipo_contrato: TipoContrato::Temporal,
             salario_bruto_anual_cents: 1_800_000,
             irpf_pb: 1000,

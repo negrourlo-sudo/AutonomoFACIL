@@ -131,14 +131,14 @@ fn obligaciones_base(act: Actividad) -> Vec<Obligacion> {
             codigo: "111",
             nombre: "Retenciones de trabajo",
             plazo: "1–20 del mes siguiente a cada trimestre",
-            detalle: "Sólo si tienes empleados o pagas nóminas.",
+            detalle: "Sólo si tienes empleados o pagas nóminas. AutónomoFACIL prepara un borrador con las nóminas generadas; revisa perceptores, brutos e IRPF.",
             trimestral: true,
         },
         Obligacion {
             codigo: "190",
             nombre: "Resumen anual de retenciones de trabajo",
             plazo: "Hasta el 31 de enero",
-            detalle: "Sólo si has presentado el 111.",
+            detalle: "Sólo si has presentado el 111. Resume las retenciones de las nóminas del año y debe cuadrar con los cuatro 111.",
             trimestral: false,
         },
         Obligacion {

@@ -44,11 +44,18 @@ pub fn serie_mensual(db: &Db, anyo: i32) -> [Mes; 12] {
         serie[i].ingresos += d.totales().base_total;
     }
     for g in &db.gastos {
-        if g.fecha.year() != anyo {
+        if g.fecha.year() != anyo || g.es_pago_personal() {
             continue;
         }
         let i = g.fecha.month0() as usize;
         serie[i].gastos += g.base_cents;
+    }
+    for n in &db.nominas {
+        if n.anyo != anyo {
+            continue;
+        }
+        let i = (n.mes.saturating_sub(1) as usize).min(11);
+        serie[i].gastos += n.coste_empresa_cents;
     }
     serie
 }
@@ -552,11 +559,26 @@ mod tests {
         ));
         db.gastos
             .push(gasto(NaiveDate::from_ymd_opt(2026, 3, 9).unwrap(), 20_000));
+        use crate::empleados::{Empleado, Nomina};
+        let empleado = Empleado {
+            id: 1,
+            nombre: "Ana".into(),
+            apellidos: "García".into(),
+            nif: "12345678Z".into(),
+            fecha_alta: NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
+            salario_bruto_anual_cents: 2_400_000,
+            irpf_pb: 1500,
+            ..Default::default()
+        };
+        let nomina = Nomina::calcular(&empleado, 9, 2026, 1);
+        let coste_personal = nomina.coste_empresa_cents;
+        db.nominas.push(nomina);
 
         let serie = serie_mensual(&db, 2026);
         assert_eq!(serie.len(), 12);
         assert_eq!(serie[0].ingresos, 100_000);
         assert_eq!(serie[6].ingresos, 50_000);
+        assert_eq!(serie[0].gastos, coste_personal);
         assert_eq!(serie[2].gastos, 20_000);
 
         let anual = contab::resumen(&db, 2026, 0);

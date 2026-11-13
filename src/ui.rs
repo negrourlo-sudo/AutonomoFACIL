@@ -2395,7 +2395,13 @@ impl App {
         ui.add_space(8.0);
         ui.horizontal_wrapped(|ui| {
             tema::kpi(ui, "Facturado", &fmt_cents_eur(r.ingresos), tema::TEXTO);
-            tema::kpi(ui, "Gastos", &fmt_cents_eur(r.gastos), tema::TEXTO);
+            tema::kpi_ayuda(
+                ui,
+                "Gastos",
+                &fmt_cents_eur(r.gastos),
+                tema::TEXTO,
+                "Incluye los gastos anotados y el coste de personal de las nóminas (bruto + Seguridad Social de la empresa, calculada sobre la base de cotización). Los pagos bancarios marcados como personal no se suman otra vez.",
+            );
             tema::kpi(
                 ui,
                 "Resultado",
@@ -3441,8 +3447,9 @@ impl App {
             .db
             .gastos
             .iter()
-            .filter(|g| g.fecha.year() == self.anyo)
-            .count();
+            .filter(|g| g.fecha.year() == self.anyo && !g.es_pago_personal())
+            .count()
+            + self.db.nominas.iter().filter(|n| n.anyo == self.anyo).count();
         if gastos_ano == 0 {
             faltan.push(format!(
                 "No hay gastos anotados en {}: el IVA deducible saldrá 0.",
@@ -3793,7 +3800,7 @@ impl App {
         let clientes = !self.db.clientes.is_empty();
         let articulos = !self.db.articulos.is_empty();
         let facturas = !self.db.facturas().is_empty();
-        let gastos = !self.db.gastos.is_empty();
+        let gastos = !self.db.gastos.is_empty() || !self.db.nominas.is_empty();
         let cobros = self
             .db
             .facturas()
@@ -3854,7 +3861,7 @@ impl App {
                     );
                     ui.label(
                         RichText::new(
-                            "Fichas, nóminas estimadas, coste de empresa y retenciones para el 111 y el 190. Si trabajas solo, puedes ignorarlo.",
+                            "Ficha laboral, nómina mensual estimada, bases y coste de empresa; el 111 y el 190 se preparan desde las nóminas generadas. Si trabajas solo, puedes ignorarlo.",
                         )
                         .size(11.0)
                         .color(tema::SUAVE),
@@ -4343,7 +4350,7 @@ impl App {
             tema::icono_ayuda(
                 ui,
                 "Empleados",
-                "Fichas laborales y nóminas mensuales. Los cálculos son orientativos: revisa cada recibo y el boletín de cotización con tu asesor.",
+                "La ficha fija el grupo de cotización, las fechas de alta y baja, el salario anual y el IRPF. «Nóminas» genera un borrador por empleado y mes. La Seguridad Social se calcula sobre la base de cotización y el IRPF sobre el bruto; revisa siempre el recibo y el boletín oficial con tu asesor.",
             );
             ui.add_space(10.0);
             if ui.button("+ Nuevo empleado").clicked() {
@@ -4355,7 +4362,7 @@ impl App {
         });
         ui.label(
             RichText::new(
-                "Fichas laborales y nóminas mensuales. Los cálculos son orientativos: revisa el recibo y el boletín de cotización con tu asesor.",
+                "Fichas laborales y nóminas mensuales. Primero guarda la ficha (grupo, fechas, salario e IRPF); después genera el mes en «Nóminas». Es una estimación: el recibo y el boletín oficial se revisan con tu asesor.",
             )
             .size(11.5)
             .color(tema::SUAVE),
@@ -4377,7 +4384,7 @@ impl App {
             tema::icono_ayuda(
                 ui,
                 "Fichas y nóminas",
-                "«Fichas» guarda los datos laborales; «Nóminas» genera los recibos del mes y los resúmenes para el 111 y el 190. Los importes son orientativos.",
+                "«Fichas» guarda los datos laborales; «Nóminas» genera los recibos del mes y prepara los borradores del 111 y el 190. La base de cotización se guarda en cada nómina y puede no coincidir con el bruto.",
             );
         });
         ui.separator();
@@ -4477,7 +4484,7 @@ impl App {
                                     ui,
                                     "Nº afiliación SS",
                                     &mut f.empleado.naf,
-                                    "Número de afiliación (NAF) del trabajador, si lo tienes a mano.",
+                                    "Número de afiliación (NAF) del trabajador. Aparece en el resumen de nómina y ayuda a identificar el boletín de cotización; si no lo tienes, déjalo vacío.",
                                 );
                                 campo_h(
                                     ui,
@@ -4500,7 +4507,7 @@ impl App {
                                 tema::etiqueta_ayuda(
                                     ui,
                                     "Tipo de contrato",
-                                    "Se usa para la ficha laboral. Los tipos de cotización son orientativos y no sustituyen el criterio de tu asesor.",
+                                    "Sólo cambia la cotización por desempleo: indefinido 1,55 % del trabajador y 5,50 % de la empresa; temporal, formación y prácticas 1,60 % y 6,70 %. No modela bonificaciones ni otras peculiaridades del contrato.",
                                 );
                                 egui::ComboBox::from_id_salt("combo_contrato")
                                     .selected_text(f.empleado.tipo_contrato.etiqueta())
@@ -4517,8 +4524,26 @@ impl App {
                                 ui.end_row();
                                 tema::etiqueta_ayuda(
                                     ui,
+                                    "Grupo de cotización",
+                                    "Decide los topes de la base de cotización. Grupos 1 a 7: bases mensuales; en un mes incompleto se prorratean con el divisor de 30 días. Grupos 8 a 11: bases diarias; en un mes incompleto se multiplican por los días de alta y en un mes completo se ajustan a 30 días con el tope mensual de 5.101,20 €. No cambia el salario. Los datos antiguos sin grupo equivalen al grupo 7.",
+                                );
+                                egui::ComboBox::from_id_salt("combo_grupo_cotizacion")
+                                    .selected_text(f.empleado.grupo_cotizacion.etiqueta())
+                                    .width(280.0)
+                                    .show_ui(ui, |ui| {
+                                        for grupo in GrupoCotizacion::TODOS {
+                                            ui.selectable_value(
+                                                &mut f.empleado.grupo_cotizacion,
+                                                grupo,
+                                                grupo.etiqueta(),
+                                            );
+                                        }
+                                    });
+                                ui.end_row();
+                                tema::etiqueta_ayuda(
+                                    ui,
                                     "Fecha de alta",
-                                    "Primer día con alta en la Seguridad Social. Decide en qué nóminas aparece el empleado.",
+                                    "Primer día de alta en la Seguridad Social. Se cuenta como día trabajado; si cae dentro del mes, esa nómina ya incluye al empleado.",
                                 );
                                 ui.add(
                                     egui::TextEdit::singleline(&mut f.alta)
@@ -4529,7 +4554,7 @@ impl App {
                                 tema::etiqueta_ayuda(
                                     ui,
                                     "Fecha de baja (opcional)",
-                                    "Último día de alta. Si la dejas vacía, el empleado sigue activo y se incluye en las próximas nóminas.",
+                                    "Último día de alta; también se cuenta como día trabajado. Si la dejas vacía, el empleado sigue activo. En los meses posteriores a la baja no se genera nómina.",
                                 );
                                 ui.add(
                                     egui::TextEdit::singleline(&mut f.baja)
@@ -4540,7 +4565,7 @@ impl App {
                                 tema::etiqueta_ayuda(
                                     ui,
                                     "Salario bruto anual",
-                                    "Salario bruto de 12 pagas antes de cotizaciones y retenciones. La nómina mensual se calcula dividiéndolo entre 12.",
+                                    "Salario bruto anual antes de cotizaciones e IRPF, repartido en 12 pagas (sin pagas extras). La nómina mensual es el anual entre 12; si el mes es incompleto se prorratea por días naturales.",
                                 );
                                 ui.add(
                                     egui::TextEdit::singleline(&mut f.salario)
@@ -4551,7 +4576,7 @@ impl App {
                                 tema::etiqueta_ayuda(
                                     ui,
                                     "IRPF %",
-                                    "Tipo de retención de IRPF que aplicarás en la nómina. Es orientativo: confirma el porcentaje con tu asesor o con la AEAT.",
+                                    "Porcentaje de retención que se aplica al bruto de la nómina. No es una cotización: la Seguridad Social va aparte y se calcula sobre la base de cotización. Confirma el tipo con tu asesor o con la AEAT.",
                                 );
                                 ui.add(
                                     egui::TextEdit::singleline(&mut f.irpf)
@@ -4568,7 +4593,7 @@ impl App {
                             });
                         ui.label(
                             RichText::new(
-                                "Estimación orientativa: 12 pagas y tipos de 2026. No aplica bases mínimas/máximas ni sustituye el recibo oficial.",
+                                "Estimación orientativa: 12 pagas y tipos generales de 2026. La Seguridad Social se calcula sobre la base de cotización (con los mínimos y máximos del grupo) y el IRPF sobre el bruto. No sustituye el recibo oficial ni el boletín de cotización.",
                             )
                             .size(10.5)
                             .color(tema::TENUE),
@@ -4676,7 +4701,11 @@ impl App {
                         ui.selectable_value(&mut self.nomina_mes, i as u32 + 1, *nombre);
                     }
                 });
-            if ui.button("Generar nóminas del mes").clicked() {
+            if ui
+                .button("Generar nóminas del mes")
+                .on_hover_text("Crea una nómina por cada empleado con alta en el mes seleccionado. Si ya existe una nómina de ese empleado para ese mes, no la duplica.")
+                .clicked()
+            {
                 match self.generar_nominas_mes() {
                     Ok((creadas, saltadas)) => {
                         let mut mensaje = format!("{} nómina(s) generada(s).", creadas);
@@ -4692,7 +4721,7 @@ impl App {
         ui.add_space(8.0);
         ui.label(
             RichText::new(
-                "Estimación de nómina mensual con 12 pagas y los tipos generales de 2026. Revisa cada caso con tu asesor y usa el recibo oficial para presentar.",
+                "Borrador mensual con 12 pagas y tipos generales de 2026. El salario se prorratea por días naturales: cuentan el alta y la baja, y el divisor son los días reales del mes (28, 29, 30 o 31). La base de cotización se limita por grupo y ejercicio. Revisa cada caso con tu asesor y usa el recibo oficial para presentar.",
             )
             .size(11.0)
             .color(tema::SUAVE),
@@ -4712,12 +4741,65 @@ impl App {
                 );
                 ui.label(
                     RichText::new(
-                        "No se aplican las bases mínimas y máximas de cotización. En 2026 el tope máximo es 5.101,20 €/mes y la base mínima depende del grupo de cotización. En salarios altos, la Seguridad Social calculada puede ser superior a la real; en salarios bajos, inferior. Revisa el recibo y el boletín con tu asesor.",
+                        "El bruto se limita entre las bases mínima y máxima del grupo y ejercicio (tablas 2024-2026). La base resultante se guarda en la nómina y es la que se usa para la Seguridad Social; el IRPF se calcula sobre el bruto. Grupos 1-7: bases mensuales que, en un mes incompleto, se prorratean con 30 días. Grupos 8-11: bases diarias en meses incompletos y equivalencia de 30 días con tope mensual en meses completos. No aplica bonificaciones, regularizaciones ni el boletín de cotización; no sustituye el recibo oficial.",
                     )
                     .size(11.0)
                     .color(tema::AMBAR),
                 );
             });
+        ui.add_space(6.0);
+        egui::CollapsingHeader::new("Guía: cómo se calcula y cómo revisar la nómina")
+            .default_open(false)
+            .show(ui, |ui| {
+                ui.label(
+                    RichText::new("Sigue este orden para no dejar ningún dato fuera.")
+                        .size(11.0)
+                        .color(tema::SUAVE),
+                );
+                ui.add_space(4.0);
+                for (titulo, texto) in [
+                    (
+                        "1. Ficha",
+                        "Guarda nombre, NIF, alta y baja, grupo, salario anual e IRPF. El grupo decide los topes de la base; las fechas deciden los días; el salario se reparte en 12 pagas.",
+                    ),
+                    (
+                        "2. Generar",
+                        "Elige año y mes y pulsa «Generar nóminas del mes». Se crea una nómina por empleado con algún día de alta; si ya existe, no se duplica. Un alta el último día del mes ya genera nómina.",
+                    ),
+                    (
+                        "3. Días y bruto",
+                        "Días = días naturales de alta en el mes / días reales del mes. El alta y la baja cuentan. Bruto = salario anual / 12; en un mes incompleto se multiplica por días / días del mes. El IRPF se aplica sobre el bruto.",
+                    ),
+                    (
+                        "4. Base de cotización",
+                        "La Seguridad Social no se calcula sobre el bruto, sino sobre la base. Se toma el bruto y se limita entre la base mínima y máxima del grupo. Grupos 1-7: base mensual; si el mes es incompleto, límite × días / 30. Grupos 8-11: base diaria × días en meses incompletos; en mes completo, equivalencia de 30 días y tope mensual de 5.101,20 €. La base aplicada queda guardada.",
+                    ),
+                    (
+                        "5. Neto y coste",
+                        "Neto = bruto - Seguridad Social del trabajador - IRPF. Coste de empresa = bruto + Seguridad Social de la empresa. El coste se imputa por devengo en Contabilidad y en el 130.",
+                    ),
+                    (
+                        "6. Cerrar y revisar",
+                        "Marca «Pagada» cuando corresponda. El PDF es un resumen borrador, no el recibo oficial ni el boletín de cotización. Si el pago bancario ya está contabilizado como gasto, exclúyelo para no duplicar el coste de personal.",
+                    ),
+                    (
+                        "7. 111 y 190",
+                        "El 111 del trimestre y el 190 del año se calculan sólo con las nóminas generadas. Usan las percepciones íntegras (bruto) y el IRPF, no la base de cotización. No incluyen facturas de profesionales, rentas en especie, atrasos ni regularizaciones. Revisa los NIF y presenta en la AEAT.",
+                    ),
+                ] {
+                    ui.label(RichText::new(titulo).strong().color(tema::TEXTO));
+                    ui.label(RichText::new(texto).size(11.0).color(tema::SUAVE));
+                    ui.add_space(4.0);
+                }
+            });
+        ui.add_space(6.0);
+        ui.label(
+            RichText::new(
+                "El coste de empresa de estas nóminas se suma automáticamente en Contabilidad y en el 130. Si registras el pago bancario como gasto, marca «Excluir: ya está en el coste de personal» para no duplicarlo.",
+            )
+            .size(10.5)
+            .color(tema::TENUE),
+        );
         ui.add_space(8.0);
 
         let trimestre = ((self.nomina_mes.saturating_sub(1)) / 3) + 1;
@@ -4746,7 +4828,7 @@ impl App {
             );
             ui.label(
                 RichText::new(format!(
-                    "111: {} nóminas, {} perceptores, base {} y retenciones {}. · 190: {} nóminas, {} perceptores, base {} y retenciones {}.",
+                    "111: {} nóminas, {} perceptores, bruto {} y retenciones {}. · 190: {} nóminas, {} perceptores, bruto {} y retenciones {}.",
                     resumen_trim.num_nominas,
                     resumen_trim.perceptores.len(),
                     fmt_cents_eur(resumen_trim.total_bruto_cents),
@@ -4761,7 +4843,7 @@ impl App {
             );
             ui.label(
                 RichText::new(
-                    "Sólo se calculan con las nóminas generadas: no incluyen facturas de profesionales, rentas en especie, regularizaciones ni otros pagos. Revisa los NIF antes de presentar.",
+                    "Se calculan sólo con las nóminas generadas: usan el bruto y el IRPF, no la base de cotización. No incluyen facturas de profesionales, rentas en especie, regularizaciones ni otros pagos. Revisa los NIF antes de presentar.",
                 )
                 .size(10.5)
                 .color(tema::TENUE),
@@ -4773,7 +4855,7 @@ impl App {
                         resumen_trim.num_nominas > 0,
                         egui::Button::new("Preparar 111 del trimestre"),
                     )
-                    .on_hover_text("Genera el PDF y el JSON del trimestre. El año y el trimestre salen del selector de arriba.")
+                    .on_hover_text("Genera el PDF y el JSON del trimestre con perceptores, percepciones íntegras (bruto) e IRPF. El año y el trimestre salen del selector de arriba.")
                     .clicked()
                 {
                     generar_retencion = Some(("111", self.nomina_anyo, trimestre));
@@ -4783,7 +4865,7 @@ impl App {
                         resumen_anual.num_nominas > 0,
                         egui::Button::new("Preparar 190 del año"),
                     )
-                    .on_hover_text("Genera el PDF y el JSON del resumen anual a partir de estas nóminas.")
+                    .on_hover_text("Genera el PDF y el JSON del resumen anual a partir de estas nóminas. Debe cuadrar con los cuatro 111 del año.")
                     .clicked()
                 {
                     generar_retencion = Some(("190", self.nomina_anyo, 0));
@@ -4803,10 +4885,16 @@ impl App {
             tema::vacio(
                 ui,
                 "Sin nóminas este mes",
-                "Guarda empleados activos y pulsa «Generar nóminas del mes».",
+                "Guarda empleados con alta en el mes y pulsa «Generar nóminas del mes». Un alta posterior al mes no genera nómina.",
             );
         } else {
             let bruto: i64 = filas.iter().map(|n| n.bruto_cents).sum();
+            let base: i64 = filas.iter().map(|n| n.base_cotizacion_cents).sum();
+            let base_txt = if filas.iter().any(|n| n.base_cotizacion_cents > 0) {
+                format!(" · Base cotización {}", fmt_cents_eur(base))
+            } else {
+                String::new()
+            };
             let ss_empleado: i64 = filas.iter().map(|n| n.ss_empleado_cents).sum();
             let irpf: i64 = filas.iter().map(|n| n.irpf_cents).sum();
             let neto: i64 = filas.iter().map(|n| n.neto_cents).sum();
@@ -4814,7 +4902,7 @@ impl App {
             tema::tarjeta(ui, |ui| {
                 ui.set_min_width(ui.available_width());
                 ui.horizontal_wrapped(|ui| {
-                    ui.label(RichText::new(format!("Bruto {} · SS empleado {} · IRPF {} · Neto {}", fmt_cents_eur(bruto), fmt_cents_eur(ss_empleado), fmt_cents_eur(irpf), fmt_cents_eur(neto))).size(11.5).color(tema::SUAVE));
+                    ui.label(RichText::new(format!("Bruto {} · SS empleado {} · IRPF {} · Neto {}{base_txt}", fmt_cents_eur(bruto), fmt_cents_eur(ss_empleado), fmt_cents_eur(irpf), fmt_cents_eur(neto))).size(11.5).color(tema::SUAVE));
                     ui.label(RichText::new(format!("Coste empresa {}", fmt_cents_eur(coste))).size(12.0).strong().color(tema::ACENTO));
                 });
             });
@@ -4834,19 +4922,40 @@ impl App {
                 .auto_shrink([false, true])
                 .show(ui, |ui| {
                     egui::Grid::new("tabla_nominas")
-                        .num_columns(8)
+                        .num_columns(9)
                         .spacing([12.0, 6.0])
                         .striped(true)
                         .show(ui, |ui| {
-                            for cabecera in [
-                                "Empleado", "Bruto", "SS empleado", "IRPF", "Neto", "Coste empresa", "Pagada", "Acciones",
+                            for (cabecera, ayuda) in [
+                                ("Empleado", "Nombre y datos laborales copiados en la nómina."),
+                                ("Días", "Días naturales trabajados / días reales del mes. Alta y baja cuentan."),
+                                ("Bruto", "Salario del periodo, prorrateado por días naturales. El IRPF se calcula sobre esta cifra."),
+                                ("SS empleado", "Seguridad Social a cargo del trabajador, calculada sobre la base de cotización."),
+                                ("IRPF", "Retención aplicada al bruto con el porcentaje de la ficha."),
+                                ("Neto", "Bruto menos Seguridad Social del trabajador e IRPF."),
+                                ("Coste empresa", "Bruto más Seguridad Social a cargo de la empresa; pasa a Contabilidad y al 130."),
+                                ("Pagada", "Estado de pago. Marcarlo no crea ningún apunte contable."),
+                                ("Acciones", "PDF genera un resumen borrador; Borrar elimina sólo esta nómina."),
                             ] {
-                                ui.label(RichText::new(cabecera).size(10.5).strong().color(tema::TENUE));
+                                ui.label(RichText::new(cabecera).size(10.5).strong().color(tema::TENUE))
+                                    .on_hover_text(ayuda);
                             }
                             ui.end_row();
                             for n in &filas {
                                 ui.label(&n.empleado_nombre);
-                                ui.label(fmt_cents_eur(n.bruto_cents));
+                                let dias = if n.dias_mes == 0 {
+                                    "—".to_string()
+                                } else {
+                                    format!("{}/{}", n.dias_trabajados, n.dias_mes)
+                                };
+                                ui.label(dias).on_hover_text(
+                                    "Días naturales trabajados / días reales del mes. Se cuentan el alta y la baja.",
+                                );
+                                ui.label(fmt_cents_eur(n.bruto_cents)).on_hover_text(format!(
+                                    "Bruto del periodo: {}\nBase de cotización aplicada: {}\nLa Seguridad Social se calcula sobre la base; el IRPF, sobre el bruto.",
+                                    fmt_cents_eur(n.bruto_cents),
+                                    fmt_cents_eur(n.base_cotizacion_cents)
+                                ));
                                 ui.label(fmt_cents_eur(n.ss_empleado_cents));
                                 ui.label(fmt_cents_eur(n.irpf_cents));
                                 ui.label(fmt_cents_eur(n.neto_cents));
@@ -4856,7 +4965,11 @@ impl App {
                                     pagada = Some((n.id, p));
                                 }
                                 ui.horizontal(|ui| {
-                                    if ui.small_button("PDF").clicked() {
+                                    if ui
+                                        .small_button("PDF")
+                                        .on_hover_text("Descarga un resumen borrador; no es el recibo oficial de salarios.")
+                                        .clicked()
+                                    {
                                         pdf_id = Some(n.id);
                                     }
                                     if ui.small_button("Borrar").clicked() {
@@ -5601,6 +5714,7 @@ impl App {
                 for (t, v) in [
                     ("Ingresos acumulados", a.ingresos),
                     ("Gastos acumulados", a.gastos),
+                    ("· de ellos, personal", a.gastos_personal),
                     ("Rendimiento neto", a.ingresos - a.gastos),
                     ("Retenciones soportadas", a.retenciones),
                 ] {
@@ -5907,6 +6021,17 @@ impl App {
                 }
                 ui.end_row();
             });
+        if r.gastos_personal > 0 {
+            ui.add_space(4.0);
+            ui.label(
+                RichText::new(format!(
+                    "De esos gastos, {} son coste de personal de {} nómina(s).",
+                    fmt_cents_eur(r.gastos_personal), r.n_nominas
+                ))
+                .size(11.0)
+                .color(tema::TENUE),
+            );
+        }
         ui.add_space(4.0);
         ui.label(
             RichText::new(
@@ -6057,7 +6182,7 @@ impl App {
                 tema::icono_ayuda(
                     ui,
                     "Gastos del periodo",
-                    "Facturas de proveedores y gastos afectos a la actividad. El IVA soportado se deduce en el 303 y la base resta en el 130.",
+                    "Facturas de proveedores y gastos afectos a la actividad. El coste de personal de las nóminas se suma automáticamente; los pagos bancarios marcados como personal se excluyen para no duplicarlo.",
                 );
                 if ui.button("+ Nuevo gasto").clicked() {
                     let mut g = Gasto::default();
@@ -6078,8 +6203,10 @@ impl App {
                 .show(&mut cols[0], |ui| {
                     if gastos.is_empty() {
                         ui.label(
-                            RichText::new("Sin gastos en este periodo.")
-                                .color(egui::Color32::from_gray(120)),
+                            RichText::new(
+                                "Sin gastos manuales en este periodo. El coste de personal, si hay nóminas, se suma aparte.",
+                            )
+                            .color(egui::Color32::from_gray(120)),
                         );
                     }
                     for g in &gastos {
@@ -6089,10 +6216,15 @@ impl App {
                             .map(|f| f.gasto.id == g.id)
                             .unwrap_or(false);
                         let etiqueta = format!(
-                            "{} · {} · {}",
+                            "{} · {} · {}{}",
                             g.fecha.format("%d/%m/%Y"),
                             if g.proveedor.is_empty() { &g.concepto } else { &g.proveedor },
-                            fmt_cents(g.total())
+                            fmt_cents(g.total()),
+                            if g.es_pago_personal() {
+                                " · pago de nóminas"
+                            } else {
+                                ""
+                            }
                         );
                         if ui.selectable_label(actual, etiqueta).clicked() {
                             self.ficha_gasto = Some(GastoBuf::desde(g.clone()));
@@ -6104,6 +6236,14 @@ impl App {
             let mut borrar_gasto: Option<u64> = None;
             let mut duplicado: Option<Gasto> = None;
             let mut error: Option<String> = None;
+
+            cols[0].label(
+                RichText::new(
+                    "El coste de personal de las nóminas se suma automáticamente. Los pagos bancarios marcados como personal se excluyen para no duplicarlo.",
+                )
+                .size(10.5)
+                .color(tema::TENUE),
+            );
 
             // Proveedores ya usados y categorías habituales: se ofrecen para no
             // volver a teclearlos.
@@ -6124,6 +6264,7 @@ impl App {
             }
             proveedores.sort_by(|a, b| a.0.to_lowercase().cmp(&b.0.to_lowercase()));
             let mut categorias_gasto: Vec<String> = vec![
+                crate::model::CATEGORIA_PAGO_PERSONAL.into(),
                 "Alquiler".into(),
                 "Suministros".into(),
                 "Teléfono e internet".into(),
@@ -6283,6 +6424,16 @@ impl App {
                                     "Márcalo cuando ya hayas pagado esta factura. No cambia el IVA ni el gasto: sólo el estado de tesorería.",
                                 );
                                 ui.checkbox(&mut f.gasto.pagado, "Ya está pagado");
+                                ui.end_row();
+                                tema::etiqueta_ayuda(
+                                    ui,
+                                    "Pago de nóminas",
+                                    "Márcalo si esta salida bancaria es el pago de una nómina. El coste de personal ya se calcula desde la pestaña Nóminas; así no se cuenta dos veces en Contabilidad ni en el 130.",
+                                );
+                                ui.checkbox(
+                                    &mut f.gasto.pago_personal,
+                                    "Excluir: ya está en el coste de personal",
+                                );
                                 ui.end_row();
                             });
 

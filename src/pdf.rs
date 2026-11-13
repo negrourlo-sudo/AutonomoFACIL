@@ -618,14 +618,15 @@ pub fn nomina(n: &Nomina, e: &Empleado, empresa: &Empresa) -> Vec<u8> {
     if !empresa.nif.trim().is_empty() {
         p.texto(MARGEN, y, 9.0, false, 0.35, &format!("NIF {}", empresa.nif));
     }
-    p.texto_der(
-        DERECHA,
-        y,
-        9.0,
-        false,
-        0.35,
-        &format!("Periodo {:02}/{}", n.mes, n.anyo),
-    );
+    let periodo = if n.dias_mes > 0 {
+        format!(
+            "Periodo {:02}/{} · {}/{} días",
+            n.mes, n.anyo, n.dias_trabajados, n.dias_mes
+        )
+    } else {
+        format!("Periodo {:02}/{}", n.mes, n.anyo)
+    };
+    p.texto_der(DERECHA, y, 9.0, false, 0.35, &periodo);
     y += 18.0;
     p.linea(MARGEN, y, DERECHA, y, 0.5, 0.55);
 
@@ -677,8 +678,20 @@ pub fn nomina(n: &Nomina, e: &Empleado, empresa: &Empresa) -> Vec<u8> {
     y += 12.0;
     p.linea(MARGEN, y, DERECHA, y, 0.3, 0.75);
     y += 13.0;
-    p.texto(MARGEN, y, 9.0, false, 0.25, "Salario bruto mensual");
+    p.texto(MARGEN, y, 9.0, false, 0.25, "Salario bruto del periodo");
     p.texto_der(DERECHA, y, 9.0, false, 0.25, &fmt_cents_eur(n.bruto_cents));
+    if n.base_cotizacion_cents > 0 {
+        y += 12.0;
+        p.texto(MARGEN, y, 9.0, false, 0.25, "Base de cotización (SS)");
+        p.texto_der(
+            DERECHA,
+            y,
+            9.0,
+            false,
+            0.25,
+            &fmt_cents_eur(n.base_cotizacion_cents),
+        );
+    }
 
     y += 24.0;
     p.texto(MARGEN, y, 10.0, true, 0.15, "DEDUCCIONES");
@@ -719,7 +732,7 @@ pub fn nomina(n: &Nomina, e: &Empleado, empresa: &Empresa) -> Vec<u8> {
 
     p.texto(
         MARGEN,
-        ALTO - 64.0,
+        ALTO - 76.0,
         7.0,
         false,
         0.55,
@@ -727,11 +740,19 @@ pub fn nomina(n: &Nomina, e: &Empleado, empresa: &Empresa) -> Vec<u8> {
     );
     p.texto(
         MARGEN,
+        ALTO - 64.0,
+        7.0,
+        false,
+        0.55,
+        "SS sobre la base de cotización; IRPF sobre el bruto. Grupos 1-7: base mensual (divisor 30 si el mes es incompleto).",
+    );
+    p.texto(
+        MARGEN,
         ALTO - 52.0,
         7.0,
         false,
         0.55,
-        "No aplica las bases mínimas y máximas de cotización.",
+        "Grupos 8-11: base diaria si el mes es incompleto; en mes completo, equivalencia de 30 días y tope mensual. No aplica bonificaciones.",
     );
     p.texto_der(
         DERECHA,
@@ -1128,6 +1149,7 @@ pub fn nombre_fichero(doc: &Documento) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::NaiveDate;
     use crate::model::{Cliente, Linea, Rectificacion, TipoDoc};
 
     fn doc() -> (Documento, Empresa) {
@@ -1260,6 +1282,7 @@ mod tests {
             nombre: "Ana".into(),
             apellidos: "García Ruiz".into(),
             nif: "12345678Z".into(),
+            fecha_alta: NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
             salario_bruto_anual_cents: 2_400_000,
             irpf_pb: 1500,
             ..Default::default()
@@ -1271,10 +1294,14 @@ mod tests {
         assert!(bytes.len() > 1_500);
         let texto = String::from_utf8_lossy(&bytes);
         assert!(texto.contains("RESUMEN DE N"));
+        assert!(texto.contains("31/31"));
         assert!(texto.contains("BORRADOR"));
+        assert!(texto.contains("Base de cotizaci"));
         assert!(texto.contains("NETO A PERCIBIR"));
         assert!(texto.contains("COSTE PARA LA EMPRESA"));
-        assert!(texto.contains("No aplica las bases"));
+        assert!(texto.contains("Grupos 1-7"));
+        assert!(texto.contains("Grupos 8-11"));
+        assert!(texto.contains("No aplica bonificaciones"));
     }
 
     #[test]
@@ -1285,6 +1312,7 @@ mod tests {
             nombre: "Ana".into(),
             apellidos: "García".into(),
             nif: "12345678Z".into(),
+            fecha_alta: NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
             salario_bruto_anual_cents: 2_400_000,
             irpf_pb: 1500,
             ..Default::default()

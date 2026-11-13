@@ -7,7 +7,7 @@ módulo de **empleados y nóminas** para autónomos con trabajadores y sociedade
 Sin Electron, sin WebView, sin Node y sin toolchain de C: una ventana nativa
 (egui/eframe) y un ejecutable.
 
-Versión actual: **0.7.2**. La corrección de una factura emitida se hace con una
+Versión actual: **0.7.3**. La corrección de una factura emitida se hace con una
 **R1 por diferencias**; no se borra ni se anula la original.
 
 ---
@@ -146,30 +146,127 @@ con preguntas rápidas. En resumen:
 
 ## Empleados y nóminas
 
-En **Datos → Empleados** está la plantilla. La ficha guarda nombre, NIF, NAF,
-puesto, contacto, fechas de alta y baja, tipo de contrato, salario bruto anual
-e IRPF. Los ficheros de datos antiguos se abren sin tocar nada: si no había
-empleados, los vectores empiezan vacíos.
+### 1. Prepara la ficha
 
-La pestaña **Nóminas** genera el mes elegido para todos los empleados activos
-con salario. Cada nómina guarda una copia de los datos laborales (nombre, NIF,
-NAF, puesto y contrato), el bruto, la Seguridad Social del trabajador, el IRPF,
-el neto, la Seguridad Social de la empresa y el coste total. Se puede marcar
-como pagada y descargar un **PDF de resumen de nómina**, marcado como borrador y no oficial. La tabla muestra
-además el IRPF retenido del trimestre (para el **111**) y del año (para el
-**190**).
+En **Datos → Empleados** está la plantilla. La ficha guarda nombre, NIF, NAF,
+puesto, contacto, fechas de alta y baja, tipo de contrato, grupo de cotización,
+salario bruto anual e IRPF. Los ficheros de datos antiguos se abren sin tocar
+nada: si no había empleados, los vectores empiezan vacíos.
+
+- **Fechas:** el alta y la baja son días naturales y se cuentan los dos. Un
+alta el día 1 o una baja el último día dan el mes completo; un alta el último
+día da un solo día. No hace falta marcar la baja para dejar de generar nóminas:
+la fecha ya lo hace.
+- **Tipo de contrato:** sólo cambia la cotización por desempleo. Indefinido:
+1,55 % del trabajador y 5,50 % de la empresa. Temporal, formación o prácticas:
+1,60 % y 6,70 %. No modela bonificaciones ni peculiaridades del contrato.
+- **Grupo de cotización:** decide los topes de la base. Los grupos 1 a 7 usan
+bases mensuales; los grupos 8 a 11 usan bases diarias, con ajuste a 30 días en
+meses completos. No cambia el salario.
+- **Salario bruto anual:** es el bruto antes de Seguridad Social e IRPF,
+repartido en **12 pagas**. La nómina ordinaria es el anual entre 12; no se
+calculan pagas extras separadas.
+- **IRPF:** es el porcentaje de retención que se aplica al bruto. No es una
+cotización: la Seguridad Social se calcula aparte, sobre la base de cotización.
+
+### 2. Genera la nómina del mes
+
+En la pestaña **Nóminas** elige el año y el mes y pulsa **«Generar nóminas del
+mes»**. Se crea una nómina por cada empleado con algún día de alta en ese mes;
+no se genera para quien todavía no había entrado ni para los meses posteriores
+a su baja. Si ya existe la nómina de ese empleado y mes, no se duplica.
+
+Cada nómina guarda una copia de los datos laborales (nombre, NIF, NAF, puesto y
+contrato), los días trabajados y del mes, el bruto, la base de cotización
+aplicada, la Seguridad Social del trabajador, el IRPF, el neto, la Seguridad
+Social de la empresa y el coste total. Se puede marcar como pagada y descargar
+un **PDF de resumen de nómina**, marcado como borrador y no oficial. La tabla
+muestra además el IRPF retenido del trimestre (para el **111**) y del año (para
+el **190**).
+
+### 3. Revisa y cierra el recibo
+
+La tabla muestra los días, el bruto, la Seguridad Social del trabajador, el
+IRPF, el neto, el coste de empresa y el estado de pago. Pasa el cursor por las
+cabeceras para ver qué significa cada columna y por el bruto para consultar la
+base de cotización aplicada. El botón **PDF** descarga un resumen de trabajo:
+no es el recibo oficial de salarios ni el boletín de cotización.
+
+### Prorrateo del salario por altas y bajas
+
+El salario mensual se prorratea cuando el alta o la baja caen dentro del mes:
+
+- se usan **días naturales** y se cuentan tanto el día de alta como el de baja;
+- el divisor es el número real de días del mes: **28, 29, 30 o 31**;
+- alta el día 1 o baja el último día dan el **mes completo**;
+- alta el último día o baja el primer día dan **un día**;
+- cada mes se prorratea por separado, también al cambiar de año;
+- las cotizaciones se calculan sobre la base de cotización y el IRPF sobre el
+  bruto prorrateado.
+
+La fórmula del bruto es:
+
+```text
+bruto mensual = salario anual / 12
+bruto del mes = bruto mensual × días naturales / días reales del mes
+```
+
+El resultado se redondea al céntimo. Si el mes está completo se usa el bruto
+mensual entero. Las nóminas creadas antes de esta versión no guardan los días y
+conservan su importe; el PDF muestra los días cuando están disponibles.
+
+### Bases de cotización
+
+Cada empleado tiene un **grupo de cotización** del 1 al 11. La nómina toma el
+bruto prorrateado y lo limita entre la base mínima y la máxima de ese grupo y
+ejercicio; la base aplicada queda guardada en la propia nómina. Las
+cotizaciones se calculan sobre esa base y el IRPF sobre el bruto. La base puede
+ser **mayor que el bruto** si se aplica el mínimo, o **menor** si se aplica el
+máximo.
+
+La tabla incluye los ejercicios **2024, 2025 y 2026**. Para 2026:
+
+| Grupo | Base mínima | Base máxima |
+|---|---:|---:|
+| 1 | 1.989,30 €/mes | 5.101,20 €/mes |
+| 2 | 1.649,70 €/mes | 5.101,20 €/mes |
+| 3 | 1.435,20 €/mes | 5.101,20 €/mes |
+| 4 a 7 | 1.424,40 €/mes | 5.101,20 €/mes |
+| 8 a 11 | 47,48 €/día | 170,04 €/día |
+
+| Grupo | Mes completo | Mes incompleto |
+|---|---|---|
+| 1 a 7 | límite mensual | límite mensual × días naturales / 30 |
+| 8 a 11 | límite diario × 30 (mín. 1.424,40 / máx. 5.101,20) | límite diario × días de alta |
+
+La app calcula con salario mensual. En los grupos 8 a 11, el mes completo se
+ajusta a 30 días para respetar el tope mensual: 170,04 × 30 = **5.101,20 €**,
+no 170,04 × 31. En meses incompletos se usa la base diaria por cada día de
+alta. La app no modela la retribución diaria pura.
+
+**Ejemplo:** grupo 7, 1.500 €/mes, alta el 15/02/2026 (14 de 28 días): bruto
+750 € y base mínima 1.424,40 × 14 / 30 = **664,72 €**, por lo que la base es
+750 €. Grupo 8, mismos 14 días: mínimo 47,48 × 14 = **664,72 €** y máximo
+170,04 × 14 = **2.380,56 €**; en mes completo, máximo **5.101,20 €**.
+
+Para ejercicios sin tabla cargada no se aplican topes y se conserva el bruto
+como base. Los datos antiguos sin grupo se interpretan como **grupo 7**
+(auxiliares administrativos) hasta que se cambie en la ficha; las nóminas
+antiguas que no guardaban base conservan una base 0 y no se recalculan.
 
 ### 111 y 190 desde las nóminas
 
 Desde la propia pestaña **Nóminas** (y también desde **Modelos e impuestos**)
 se pueden preparar los dos modelos:
 
-- **111 del trimestre**: agrupa las nóminas del trimestre por trabajador y
-  calcula las casillas 01–03 (perceptores, percepciones íntegras y retenciones),
-  con un detalle informativo por perceptor.
-- **190 del año**: suma todas las nóminas del ejercicio, cuenta las percepciones
-  (nóminas, no personas) y genera el detalle anual por perceptor con NIF, base y
-  retención.
+- **111 del trimestre**: agrupa las nóminas del trimestre por trabajador.
+  Casilla 01: número de perceptores; 02: percepciones íntegras (el **bruto** de
+  las nóminas); 03: retenciones de IRPF. La **base de cotización no se usa** en
+  el 111. El detalle por perceptor es informativo.
+- **190 del año**: suma todas las nóminas del ejercicio. Casilla 01: número de
+  percepciones (nóminas, no personas); 02: total de percepciones íntegras; 03:
+  total de retenciones; P: personas distintas, sólo informativo. Incluye el
+  detalle anual por perceptor con NIF, bruto y retención.
 
 Cada botón escribe un **PDF borrador** y un **JSON** en
 `export\<empresa>\Modelos\`, con el modelo, el año, el periodo y la empresa en el
@@ -190,21 +287,29 @@ La estimación usa 12 pagas y los tipos generales de 2026:
 - Empresa: contingencias comunes 23,60 %, desempleo 5,50 % o 6,70 %, FOGASA
   0,20 %, formación 0,60 %, MEI 0,67 % y una estimación de AT/EP del 1,50 %.
 
-**Bases mínimas y máximas:** la estimación **no las aplica**. Para 2026, el
-tope máximo de cotización es **5.101,20 €/mes** y la base mínima depende del
-grupo de cotización (por ejemplo, 1.989,30 €/mes para el grupo 1 y
-1.424,40 €/mes para los grupos 4 a 7). La ficha del empleado no pide ese grupo,
-así que no se puede elegir una base mínima correcta sin inventarla. En
-consecuencia, en salarios altos la Seguridad Social calculada puede ser
-superior a la real (falta el tope máximo) y en salarios bajos puede ser inferior
-(falta la base mínima).
+La Seguridad Social del trabajador y de la empresa se calcula sobre la **base
+de cotización**, no sobre el bruto. El IRPF se calcula sobre el **bruto**. Las
+fórmulas del recibo son:
 
-El IRPF es el que se indique en la ficha. **No es una nómina oficial**: no
-prorratea altas o bajas a mitad de mes, no aplica bases mínimas ni máximas de
-cotización, no aplica bonificaciones ni tramos personales y no genera el boletín
-de cotización. Sirve para presupuestar el coste de una persona y anticipar las
-retenciones; el recibo y la presentación se revisan con el asesor o con el
-programa de nóminas.
+```text
+SS trabajador = base de cotización × 6,48 % (indefinido) o 6,53 % (temporal)
+SS empresa = base de cotización × 32,07 % (indefinido) o 33,27 % (temporal)
+IRPF = bruto × porcentaje de la ficha
+neto = bruto - SS trabajador - IRPF
+coste de empresa = bruto + SS empresa
+```
+
+Los porcentajes son los tipos generales de 2026 que usa la estimación; no
+incluyen bonificaciones, tramos personales, regularizaciones ni el boletín de
+cotización. **No es una nómina oficial**: sirve para presupuestar el coste de
+una persona y anticipar las retenciones. El recibo y la presentación se revisan
+con el asesor o con el programa de nóminas.
+
+El **coste de empresa** de cada nómina se suma por devengo a **Contabilidad** y
+al cálculo del **130**. Si el pago bancario de la nómina ya está registrado como
+gasto, marca la casilla **«Excluir: ya está en el coste de personal»** o usa la
+categoría **«Nóminas»**: ese apunte no se vuelve a sumar en gastos, IVA ni 347.
+Así el coste de personal no se cuenta dos veces.
 
 ---
 
@@ -427,6 +532,8 @@ cambia los fps. Se mantiene porque en máquinas con OpenGL por software
   presupuestos ni proformas ni borradores cuentan.
 - Los **gastos** se registran a mano (proveedor, NIF, base, IVA, retención,
   categoría, pagado).
+- El **coste de personal** de las nóminas se suma automáticamente a los gastos y
+  al 130; los pagos bancarios marcados como personal no se duplican.
 - Calcula **IVA a ingresar** (modelo 303: repercutido − soportado) e **IRPF 130
   estimado** (20 % del rendimiento neto menos las retenciones practicadas).
 - **Libro de ingresos y gastos** exportable a CSV con `;` y BOM UTF-8 en

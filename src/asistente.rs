@@ -277,9 +277,10 @@ pub fn guion(paso: usize, p: &Perfil) -> String {
             .to_string(),
         1 => "Cuéntame a qué te dedicas. La actividad decide el IVA que te propongo y los \
               modelos que aparecen; el régimen del IRPF decide si tu pago a cuenta es el \
-              ciento treinta o el ciento treinta y uno. Marca también si tienes empleados, \
-              si pagas el alquiler de un local o si estás en el SII, porque cada uno añade \
-              modelos y plazos distintos."
+              ciento treinta o el ciento treinta y uno. Marca también si tienes empleados o \
+              pagas nóminas, si pagas el alquiler de un local o si estás en el SII, porque cada \
+              uno añade modelos y plazos distintos. Las nóminas añaden el ciento once de cada \
+              trimestre y el ciento noventa del año."
             .to_string(),
         2 => "Ahora, ¿a quién facturas? Esto cambia el IVA y la retención. A empresas y \
               profesionales españoles se les retiene el quince por ciento; a particulares, no. \

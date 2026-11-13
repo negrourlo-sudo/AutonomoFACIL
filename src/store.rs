@@ -346,6 +346,7 @@ mod tests {
                 pagado: i % 3 == 0,
                 categoria: ["Compras", "Software", "Alquiler", "Suministros"][i % 4]
                     .to_string(),
+                pago_personal: false,
             });
         }
 

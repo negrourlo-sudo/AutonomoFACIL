@@ -255,14 +255,14 @@ const GUIA_111: Guia = Guia {
         "Cl@ve Móvil o Cl@ve PIN (personas físicas)",
     ],
     pasos: &[
-        "Calcula las retenciones de las nóminas y de los profesionales del trimestre.",
+        "Reúne las nóminas del trimestre y, si las hay, las facturas de profesionales con retención.",
+        "Calcula las percepciones íntegras (el bruto) y las retenciones de IRPF de cada perceptor. No uses la base de cotización para el 111.",
         "En la Sede elige «Modelo 111. Retenciones e ingresos a cuenta del IRPF».",
-        "Identifícate y abre «Nueva declaración».",
-        "Teclea número de perceptores, base de las retenciones y cuota retenida.",
-        "Presenta y guarda el justificante; el 190 resume el año.",
+        "Identifícate, abre «Nueva declaración» y teclea perceptores, base de retenciones y cuota retenida.",
+        "Presenta y guarda el justificante; el 190 resume el año y debe cuadrar con los cuatro 111.",
     ],
     fichero: "Admite fichero con el diseño de registro oficial, cómodo si hay muchos empleados; el formulario sirve para pocos.",
-    aviso: "Plazo: 1–20 del mes siguiente a cada trimestre. Este borrador de AutónomoFACIL sólo suma las nóminas generadas (casillas 01–03): no incluye facturas de profesionales, rentas en especie, regularizaciones ni otros pagos. Si no hay nóminas ni retenciones, no se presenta.",
+    aviso: "Plazo: 1–20 del mes siguiente a cada trimestre. Este borrador de AutónomoFACIL sólo suma las nóminas generadas: 01 perceptores, 02 percepciones íntegras (bruto) y 03 retenciones. La base de cotización no se usa en el 111. No incluye facturas de profesionales, rentas en especie, regularizaciones ni otros pagos; si no hay nóminas ni retenciones, no se presenta.",
 };
 
 const GUIA_115: Guia = Guia {
@@ -291,14 +291,15 @@ const GUIA_190: Guia = Guia {
         "Cl@ve Móvil o Cl@ve PIN (personas físicas)",
     ],
     pasos: &[
-        "Reúne los cuatro 111 del año: perceptores, bases y retenciones.",
+        "Reúne los cuatro 111 del año: perceptores, percepciones íntegras y retenciones.",
+        "Comprueba que las nóminas generadas y sus NIF coinciden con lo presentado en cada 111.",
         "En la Sede elige «Modelo 190. Resumen anual de retenciones».",
         "Identifícate y abre «Nueva declaración»; puedes importar los 111 si los tienes en fichero.",
         "Comprueba que los totales cuadran con la suma de los 111 presentados.",
         "Presenta y guarda el justificante antes del 31 de enero.",
     ],
     fichero: "Admite fichero TGVI con el diseño de registro anual.",
-    aviso: "Sólo si has presentado el 111. Este borrador se calcula con las nóminas generadas y su detalle por perceptor; no incluye facturas de profesionales, rentas en especie ni otras rentas. Revisa NIF, perceptores y que cuadre con los cuatro 111 del año.",
+    aviso: "Sólo si has presentado el 111. Este borrador se calcula con las nóminas generadas: 01 percepciones (nóminas), 02 percepciones íntegras (bruto), 03 retenciones y P personas distintas. La base de cotización no se usa. No incluye facturas de profesionales, rentas en especie ni otras rentas; revisa NIF y que cuadre con los cuatro 111 del año.",
 };
 
 const GUIA_180: Guia = Guia {

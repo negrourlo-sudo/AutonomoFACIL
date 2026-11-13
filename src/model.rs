@@ -592,6 +592,10 @@ pub struct Articulo {
     pub unidad: String,
 }
 
+/// Categoría que identifica un pago bancario de nóminas ya incluido en el
+/// coste de personal.
+pub const CATEGORIA_PAGO_PERSONAL: &str = "Nóminas";
+
 /// Gasto del negocio: factura recibida o compra con IVA deducible.
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Gasto {
@@ -609,6 +613,10 @@ pub struct Gasto {
     #[serde(default)]
     pub pagado: bool,
     pub categoria: String,
+    /// Pago bancario de una nómina ya incluida en el coste de personal. Se
+    /// excluye de los gastos para no contarlo dos veces en el 130.
+    #[serde(default)]
+    pub pago_personal: bool,
 }
 
 impl Default for Gasto {
@@ -624,11 +632,24 @@ impl Default for Gasto {
             irpf_pb: 0,
             pagado: false,
             categoria: String::new(),
+            pago_personal: false,
         }
     }
 }
 
 impl Gasto {
+    /// ¿Es el pago bancario de una nómina, ya contabilizado como coste de
+    /// personal? Se reconoce por la marca explícita o por una categoría
+    /// habitual, para que los datos ya guardados no se dupliquen.
+    pub fn es_pago_personal(&self) -> bool {
+        let categoria = self.categoria.trim().to_lowercase();
+        self.pago_personal
+            || matches!(
+                categoria.as_str(),
+                "nóminas" | "nominas" | "sueldos" | "salarios"
+            )
+    }
+
     pub fn cuota_iva(&self) -> i64 {
         div_round(self.base_cents * self.iva_pb as i64, 10_000)
     }

@@ -5,6 +5,15 @@
 //! sustituye el recibo oficial, el boletín de cotización ni el cálculo de la
 //! AEAT. El objetivo es que el autónomo o la sociedad sepan cuánto cuesta una
 //! persona y cuánto se retiene cada trimestre para el 111 y el 190.
+//!
+//! Prorrateo: el salario usa días naturales del mes, contando tanto el día de
+//! alta como el de baja. El divisor es el número real de días del mes (28, 29,
+//! 30 o 31). Un alta el día 1 o una baja el último día dan el mes completo.
+//! Los límites de base no siguen siempre ese divisor: los grupos 1 a 7 son
+//! mensuales y, en un mes incompleto, se prorratean con 30 días; los grupos 8 a
+//! 11 tienen bases diarias y, con salario mensual, usan los días de alta en un
+//! mes incompleto y la equivalencia de 30 días con el tope mensual en un mes
+//! completo.
 
 use crate::model::div_round;
 use chrono::{Local, NaiveDate};
@@ -20,6 +29,176 @@ pub const SS_FOGASA_PB: i32 = 20; // 0,20 %
 pub const SS_FORMACION_EMPRESA_PB: i32 = 60; // 0,60 %
 pub const SS_MEI_EMPRESA_PB: i32 = 67; // 0,67 %
 pub const SS_AT_EP_PB: i32 = 150; // 1,50 % orientativo
+
+/// Grupo de cotización del Régimen General. Los datos antiguos sin grupo se
+/// interpretan como grupo 7 para no alterar sus importes más de lo necesario.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GrupoCotizacion {
+    Grupo1,
+    Grupo2,
+    Grupo3,
+    Grupo4,
+    Grupo5,
+    Grupo6,
+    Grupo7,
+    Grupo8,
+    Grupo9,
+    Grupo10,
+    Grupo11,
+}
+
+impl Default for GrupoCotizacion {
+    fn default() -> Self {
+        Self::Grupo7
+    }
+}
+
+impl GrupoCotizacion {
+    pub const TODOS: [GrupoCotizacion; 11] = [
+        GrupoCotizacion::Grupo1,
+        GrupoCotizacion::Grupo2,
+        GrupoCotizacion::Grupo3,
+        GrupoCotizacion::Grupo4,
+        GrupoCotizacion::Grupo5,
+        GrupoCotizacion::Grupo6,
+        GrupoCotizacion::Grupo7,
+        GrupoCotizacion::Grupo8,
+        GrupoCotizacion::Grupo9,
+        GrupoCotizacion::Grupo10,
+        GrupoCotizacion::Grupo11,
+    ];
+
+    pub fn numero(self) -> u32 {
+        self as u32 + 1
+    }
+
+    /// Los grupos 8 a 11 se expresan con bases diarias; los grupos 1 a 7, con
+    /// bases mensuales. La app calcula salario mensual y ajusta el mes completo
+    /// de los grupos diarios a 30 días.
+    pub fn es_diaria(self) -> bool {
+        self.numero() >= 8
+    }
+
+    pub fn etiqueta(self) -> &'static str {
+        match self {
+            GrupoCotizacion::Grupo1 => "1 · Ingenieros y licenciados",
+            GrupoCotizacion::Grupo2 => "2 · Ingenieros técnicos y peritos",
+            GrupoCotizacion::Grupo3 => "3 · Jefes administrativos y de taller",
+            GrupoCotizacion::Grupo4 => "4 · Ayudantes no titulados",
+            GrupoCotizacion::Grupo5 => "5 · Oficiales administrativos",
+            GrupoCotizacion::Grupo6 => "6 · Subalternos",
+            GrupoCotizacion::Grupo7 => "7 · Auxiliares administrativos",
+            GrupoCotizacion::Grupo8 => "8 · Oficiales de primera y segunda",
+            GrupoCotizacion::Grupo9 => "9 · Oficiales de tercera y especialistas",
+            GrupoCotizacion::Grupo10 => "10 · Peones",
+            GrupoCotizacion::Grupo11 => "11 · Menores de 18 años",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BasesCotizacion {
+    pub minima_cents: i64,
+    pub maxima_cents: i64,
+}
+
+// Bases en céntimos. Grupos 1 a 7: mínimas/máximas mensuales. Grupos 8 a 11:
+// mínimas/máximas diarias, tal como publica la orden de cotización.
+const MINIMAS_2026: [i64; 11] = [
+    198_930, 164_970, 143_520, 142_440, 142_440, 142_440, 142_440, 4_748, 4_748, 4_748,
+    4_748,
+];
+const MINIMAS_2025: [i64; 11] = [
+    192_900, 159_960, 139_170, 138_120, 138_120, 138_120, 138_120, 4_604, 4_604, 4_604,
+    4_604,
+];
+const MINIMAS_2024: [i64; 11] = [
+    184_740, 153_210, 133_290, 132_300, 132_300, 132_300, 132_300, 4_410, 4_410, 4_410,
+    4_410,
+];
+const MAXIMAS_DIARIAS_2026: i64 = 17_004;
+const MAXIMAS_DIARIAS_2025: i64 = 16_365;
+const MAXIMAS_DIARIAS_2024: i64 = 15_735;
+
+/// Bases mínimas y máximas de un grupo y ejercicio. Para los grupos 1 a 7 son
+/// mensuales; para los grupos 8 a 11 son diarias. La nómina ajusta estas
+/// últimas a 30 días cuando el mes está completo y hay salario mensual.
+/// Devuelve `None` para ejercicios sin tabla cargada; en ese caso la nómina no
+/// aplica topes.
+pub fn bases_cotizacion(anyo: i32, grupo: GrupoCotizacion) -> Option<BasesCotizacion> {
+    let (minimas, maxima_mensual) = match anyo {
+        2026 => (&MINIMAS_2026, 510_120),
+        2025 => (&MINIMAS_2025, 490_950),
+        2024 => (&MINIMAS_2024, 472_050),
+        _ => return None,
+    };
+    let indice = grupo.numero().saturating_sub(1) as usize;
+    let maxima_cents = if grupo.es_diaria() {
+        match anyo {
+            2026 => MAXIMAS_DIARIAS_2026,
+            2025 => MAXIMAS_DIARIAS_2025,
+            2024 => MAXIMAS_DIARIAS_2024,
+            _ => unreachable!(),
+        }
+    } else {
+        maxima_mensual
+    };
+    Some(BasesCotizacion {
+        minima_cents: minimas.get(indice).copied()?,
+        maxima_cents,
+    })
+}
+
+/// Tope común de la base mensual para los ejercicios con tabla cargada.
+fn tope_maximo_mensual(anyo: i32) -> i64 {
+    match anyo {
+        2026 => 510_120,
+        2025 => 490_950,
+        2024 => 472_050,
+        _ => i64::MAX,
+    }
+}
+
+fn base_cotizacion_aplicada(
+    bruto_cents: i64,
+    anyo: i32,
+    grupo: GrupoCotizacion,
+    dias_trabajados: u32,
+    dias_mes: u32,
+) -> i64 {
+    let Some(limites) = bases_cotizacion(anyo, grupo) else {
+        return bruto_cents;
+    };
+    if dias_mes == 0 {
+        return bruto_cents;
+    }
+    // Los límites se prorratean según el grupo y la modalidad de salario.
+    // La app calcula nóminas mensuales: en los grupos diarios, el mes completo
+    // se ajusta a 30 días y queda sujeto al tope mensual; el límite diario se
+    // usa en los meses incompletos.
+    let (minima, maxima) = if grupo.es_diaria() {
+        if dias_trabajados >= dias_mes {
+            (
+                limites.minima_cents * 30,
+                (limites.maxima_cents * 30).min(tope_maximo_mensual(anyo)),
+            )
+        } else {
+            (
+                limites.minima_cents * dias_trabajados as i64,
+                limites.maxima_cents * dias_trabajados as i64,
+            )
+        }
+    } else if dias_trabajados < dias_mes {
+        // Grupos mensuales en mes incompleto: divisor oficial de 30 días.
+        (
+            div_round(limites.minima_cents * dias_trabajados as i64, 30),
+            div_round(limites.maxima_cents * dias_trabajados as i64, 30),
+        )
+    } else {
+        (limites.minima_cents, limites.maxima_cents)
+    };
+    bruto_cents.clamp(minima, maxima)
+}
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum TipoContrato {
@@ -80,6 +259,9 @@ pub struct Empleado {
     pub fecha_baja: Option<NaiveDate>,
     #[serde(default)]
     pub tipo_contrato: TipoContrato,
+    /// Grupo de cotización que fija las bases mínimas y máximas.
+    #[serde(default)]
+    pub grupo_cotizacion: GrupoCotizacion,
     /// Salario bruto anual en céntimos, antes de pagas extras.
     #[serde(default)]
     pub salario_bruto_anual_cents: i64,
@@ -104,6 +286,7 @@ impl Default for Empleado {
             fecha_alta: Local::now().date_naive(),
             fecha_baja: None,
             tipo_contrato: TipoContrato::Indefinido,
+            grupo_cotizacion: GrupoCotizacion::Grupo7,
             salario_bruto_anual_cents: 0,
             irpf_pb: 1500,
             notas: String::new(),
@@ -134,27 +317,51 @@ impl Empleado {
         self.fecha_baja.is_none()
     }
 
-    /// ¿Está de alta en algún momento del mes indicado? La nómina es de mes
-    /// completo; no se prorratea una alta o baja a mitad de mes.
+    /// ¿Está de alta en algún momento del mes indicado?
     pub fn activo_en_mes(&self, anyo: i32, mes: u32) -> bool {
-        let Some(inicio) = NaiveDate::from_ymd_opt(anyo, mes, 1) else {
-            return false;
+        self.dias_trabajados_en_mes(anyo, mes) > 0
+    }
+
+    /// Días naturales trabajados en el mes, contando el alta y la baja.
+    /// Devuelve 0 si el empleado no coincide con el mes.
+    pub fn dias_trabajados_en_mes(&self, anyo: i32, mes: u32) -> u32 {
+        let Some((inicio, fin)) = rango_mes(anyo, mes) else {
+            return 0;
         };
-        let siguiente = if mes == 12 {
-            NaiveDate::from_ymd_opt(anyo + 1, 1, 1)
+        let desde = self.fecha_alta.max(inicio);
+        let hasta = self.fecha_baja.unwrap_or(fin).min(fin);
+        if desde > hasta {
+            0
         } else {
-            NaiveDate::from_ymd_opt(anyo, mes + 1, 1)
-        };
-        let Some(fin) = siguiente.map(|f| f - chrono::Duration::days(1)) else {
-            return false;
-        };
-        self.fecha_alta <= fin && self.fecha_baja.map(|b| b >= inicio).unwrap_or(true)
+            (hasta - desde).num_days() as u32 + 1
+        }
     }
 
     /// Salario bruto mensual estimado: el anual repartido en 12 pagas.
     pub fn bruto_mensual_cents(&self) -> i64 {
         div_round(self.salario_bruto_anual_cents, 12)
     }
+}
+
+/// Días naturales del mes. Febrero devuelve 28 o 29 según el año.
+pub fn dias_del_mes(anyo: i32, mes: u32) -> u32 {
+    let Some((inicio, fin)) = rango_mes(anyo, mes) else {
+        return 0;
+    };
+    (fin - inicio).num_days() as u32 + 1
+}
+
+fn rango_mes(anyo: i32, mes: u32) -> Option<(NaiveDate, NaiveDate)> {
+    if !(1..=12).contains(&mes) {
+        return None;
+    }
+    let inicio = NaiveDate::from_ymd_opt(anyo, mes, 1)?;
+    let siguiente = if mes == 12 {
+        NaiveDate::from_ymd_opt(anyo + 1, 1, 1)?
+    } else {
+        NaiveDate::from_ymd_opt(anyo, mes + 1, 1)?
+    };
+    Some((inicio, siguiente - chrono::Duration::days(1)))
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
@@ -173,11 +380,23 @@ pub struct Nomina {
     pub puesto: String,
     #[serde(default)]
     pub tipo_contrato: Option<TipoContrato>,
+    /// Grupo aplicado en el momento de generar la nómina.
+    #[serde(default)]
+    pub grupo_cotizacion: GrupoCotizacion,
     #[serde(default)]
     pub irpf_pb: Option<i32>,
     pub anyo: i32,
     pub mes: u32,
+    /// Días naturales del mes que se han pagado (alta y baja incluidos).
+    #[serde(default)]
+    pub dias_trabajados: u32,
+    /// Días naturales del mes usado como divisor (28, 29, 30 o 31).
+    #[serde(default)]
+    pub dias_mes: u32,
     pub bruto_cents: i64,
+    /// Base de cotización aplicada después de mínimos y máximos.
+    #[serde(default)]
+    pub base_cotizacion_cents: i64,
     pub ss_empleado_cents: i64,
     pub irpf_cents: i64,
     pub neto_cents: i64,
@@ -188,8 +407,22 @@ pub struct Nomina {
 }
 
 impl Nomina {
+    /// Calcula la nómina de un mes. Si el alta o la baja caen dentro del mes,
+    /// el bruto mensual se prorratea por días naturales, contando ambos
+    /// extremos y usando los días reales del mes como divisor. La base de
+    /// cotización se limita por el grupo y el ejercicio; el IRPF se calcula
+    /// sobre el bruto prorrateado.
     pub fn calcular(empleado: &Empleado, id: u64, anyo: i32, mes: u32) -> Self {
-        let bruto = empleado.bruto_mensual_cents();
+        let dias_mes = dias_del_mes(anyo, mes);
+        let dias_trabajados = empleado.dias_trabajados_en_mes(anyo, mes);
+        let bruto_mensual = empleado.bruto_mensual_cents();
+        let bruto = if dias_mes == 0 || dias_trabajados == 0 {
+            0
+        } else if dias_trabajados >= dias_mes {
+            bruto_mensual
+        } else {
+            div_round(bruto_mensual * dias_trabajados as i64, dias_mes as i64)
+        };
         let ss_empleado_pb = SS_CC_EMPLEADO_PB
             + empleado.tipo_contrato.desempleo_empleado_pb()
             + SS_FORMACION_EMPLEADO_PB
@@ -200,9 +433,16 @@ impl Nomina {
             + SS_FORMACION_EMPRESA_PB
             + SS_MEI_EMPRESA_PB
             + SS_AT_EP_PB;
-        let ss_empleado = div_round(bruto * ss_empleado_pb as i64, 10_000);
+        let base_cotizacion_cents = base_cotizacion_aplicada(
+            bruto,
+            anyo,
+            empleado.grupo_cotizacion,
+            dias_trabajados,
+            dias_mes,
+        );
+        let ss_empleado = div_round(base_cotizacion_cents * ss_empleado_pb as i64, 10_000);
         let irpf = div_round(bruto * empleado.irpf_pb as i64, 10_000);
-        let ss_empresa = div_round(bruto * ss_empresa_pb as i64, 10_000);
+        let ss_empresa = div_round(base_cotizacion_cents * ss_empresa_pb as i64, 10_000);
         Self {
             id,
             empleado_id: empleado.id,
@@ -211,10 +451,14 @@ impl Nomina {
             empleado_naf: empleado.naf.clone(),
             puesto: empleado.puesto.clone(),
             tipo_contrato: Some(empleado.tipo_contrato),
+            grupo_cotizacion: empleado.grupo_cotizacion,
             irpf_pb: Some(empleado.irpf_pb),
             anyo,
             mes,
+            dias_trabajados,
+            dias_mes,
             bruto_cents: bruto,
+            base_cotizacion_cents,
             ss_empleado_cents: ss_empleado,
             irpf_cents: irpf,
             neto_cents: bruto - ss_empleado - irpf,
@@ -229,7 +473,8 @@ impl Nomina {
     }
 }
 
-/// Genera las nóminas del mes sólo para los empleados activos con salario.
+/// Genera las nóminas del mes sólo para los empleados con alta en el mes y
+/// salario. Un alta o baja parcial también genera nómina.
 ///
 /// Es idempotente: si un empleado ya tiene una nómina de ese año y mes, no se
 /// crea otra; se cuenta como saltada. No guarda el fichero ni toca la UI: eso
@@ -246,12 +491,14 @@ pub fn generar_nominas_mes(
     }
     let empleados: Vec<Empleado> = empleados
         .iter()
-        .filter(|e| e.activo_en_mes(anyo, mes) && e.salario_bruto_anual_cents > 0)
+        .filter(|e| {
+            e.dias_trabajados_en_mes(anyo, mes) > 0 && e.salario_bruto_anual_cents > 0
+        })
         .cloned()
         .collect();
     if empleados.is_empty() {
         return Err(
-            "No hay empleados activos con salario ese mes. Revisa las fichas y las fechas."
+            "No hay empleados con alta y salario ese mes. Revisa las fichas y las fechas."
                 .into(),
         );
     }
@@ -384,7 +631,7 @@ mod tests {
             nombre: "Ana".to_string(),
             apellidos: "García Ruiz".to_string(),
             nif: "12345678Z".to_string(),
-            fecha_alta: NaiveDate::from_ymd_opt(2026, 1, 10).unwrap(),
+            fecha_alta: NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
             tipo_contrato: TipoContrato::Indefinido,
             salario_bruto_anual_cents: 2_400_000,
             irpf_pb: 1500,
@@ -405,7 +652,256 @@ mod tests {
         // 23,60 + 5,50 + 0,20 + 0,60 + 0,67 + 1,50 = 32,07 %
         assert_eq!(n.ss_empresa_cents, 64_140);
         assert_eq!(n.coste_empresa_cents, 264_140);
+        assert_eq!(n.grupo_cotizacion, GrupoCotizacion::Grupo7);
+        assert_eq!(n.base_cotizacion_cents, 200_000);
         assert_eq!(n.trimestre(), 1);
+    }
+
+    #[test]
+    fn las_bases_por_grupo_y_ejercicio_estan_cargadas() {
+        let bases = |anyo, grupo| bases_cotizacion(anyo, grupo).expect("tabla cargada");
+
+        assert_eq!(
+            bases(2026, GrupoCotizacion::Grupo1),
+            BasesCotizacion {
+                minima_cents: 198_930,
+                maxima_cents: 510_120,
+            }
+        );
+        assert_eq!(bases(2026, GrupoCotizacion::Grupo2).minima_cents, 164_970);
+        assert_eq!(bases(2026, GrupoCotizacion::Grupo3).minima_cents, 143_520);
+        assert_eq!(bases(2026, GrupoCotizacion::Grupo7).minima_cents, 142_440);
+        assert_eq!(bases(2026, GrupoCotizacion::Grupo8).minima_cents, 4_748);
+        assert_eq!(bases(2026, GrupoCotizacion::Grupo8).maxima_cents, 17_004);
+
+        assert_eq!(bases(2025, GrupoCotizacion::Grupo1).minima_cents, 192_900);
+        assert_eq!(bases(2025, GrupoCotizacion::Grupo2).minima_cents, 159_960);
+        assert_eq!(bases(2025, GrupoCotizacion::Grupo3).minima_cents, 139_170);
+        assert_eq!(bases(2025, GrupoCotizacion::Grupo7).minima_cents, 138_120);
+        assert_eq!(bases(2025, GrupoCotizacion::Grupo7).maxima_cents, 490_950);
+        assert_eq!(bases(2025, GrupoCotizacion::Grupo8).minima_cents, 4_604);
+
+        assert_eq!(bases(2024, GrupoCotizacion::Grupo1).minima_cents, 184_740);
+        assert_eq!(bases(2024, GrupoCotizacion::Grupo3).minima_cents, 133_290);
+        assert_eq!(bases(2024, GrupoCotizacion::Grupo7).minima_cents, 132_300);
+        assert_eq!(bases(2024, GrupoCotizacion::Grupo7).maxima_cents, 472_050);
+        assert_eq!(bases(2024, GrupoCotizacion::Grupo8).minima_cents, 4_410);
+        assert_eq!(bases_cotizacion(2023, GrupoCotizacion::Grupo7), None);
+    }
+
+    #[test]
+    fn la_base_no_baja_del_minimo_del_grupo() {
+        let mut e = empleado();
+        e.grupo_cotizacion = GrupoCotizacion::Grupo7;
+        e.salario_bruto_anual_cents = 1_200_000; // 100.000 céntimos al mes
+        let n = Nomina::calcular(&e, 19, 2026, 1);
+
+        assert_eq!(n.bruto_cents, 100_000);
+        assert_eq!(n.base_cotizacion_cents, 142_440);
+        assert_eq!(
+            n.ss_empleado_cents,
+            div_round(142_440 * 648, 10_000)
+        );
+        assert_eq!(n.irpf_cents, 15_000);
+        assert_eq!(
+            n.neto_cents,
+            100_000 - n.ss_empleado_cents - n.irpf_cents
+        );
+        assert_eq!(
+            n.coste_empresa_cents,
+            100_000 + div_round(142_440 * 3207, 10_000)
+        );
+
+        e.grupo_cotizacion = GrupoCotizacion::Grupo1;
+        e.salario_bruto_anual_cents = 1_500_000; // 125.000 céntimos al mes
+        let n = Nomina::calcular(&e, 20, 2026, 1);
+        assert_eq!(n.base_cotizacion_cents, 198_930);
+    }
+
+    #[test]
+    fn la_base_no_supera_el_maximo_del_ejercicio() {
+        let mut e = empleado();
+        e.grupo_cotizacion = GrupoCotizacion::Grupo1;
+        e.salario_bruto_anual_cents = 12_000_000; // 1.000.000 céntimos al mes
+        let n = Nomina::calcular(&e, 21, 2026, 1);
+
+        assert_eq!(n.bruto_cents, 1_000_000);
+        assert_eq!(n.base_cotizacion_cents, 510_120);
+        assert_eq!(
+            n.ss_empleado_cents,
+            div_round(510_120 * 648, 10_000)
+        );
+        assert_eq!(n.irpf_cents, 150_000);
+    }
+
+    #[test]
+    fn los_limites_mensuales_usan_divisor_treinta_dias() {
+        let mut e = empleado();
+        e.grupo_cotizacion = GrupoCotizacion::Grupo7;
+        e.salario_bruto_anual_cents = 1_200_000; // 100.000 céntimos al mes
+        e.fecha_alta = NaiveDate::from_ymd_opt(2026, 2, 15).unwrap();
+        let n = Nomina::calcular(&e, 22, 2026, 2);
+
+        // El salario se prorratea por 14/28 días, pero la base mínima mensual
+        // usa el divisor oficial de 30 días: 142.440 × 14 / 30 = 66.472.
+        assert_eq!(n.bruto_cents, 50_000);
+        assert_eq!(n.base_cotizacion_cents, 66_472);
+        assert_eq!((n.dias_trabajados, n.dias_mes), (14, 28));
+    }
+
+    #[test]
+    fn los_grupos_diarios_usan_la_base_diaria_en_meses_incompletos() {
+        let mut e = empleado();
+        e.grupo_cotizacion = GrupoCotizacion::Grupo8;
+        e.salario_bruto_anual_cents = 1_200_000; // 100.000 céntimos al mes
+        e.fecha_alta = NaiveDate::from_ymd_opt(2026, 2, 15).unwrap();
+        let n = Nomina::calcular(&e, 23, 2026, 2);
+        assert_eq!(n.base_cotizacion_cents, 4_748 * 14);
+
+        // En un mes incompleto también se aplica el máximo diario, no el tope
+        // mensual completo.
+        e.salario_bruto_anual_cents = 12_000_000;
+        let n = Nomina::calcular(&e, 24, 2026, 2);
+        assert_eq!(n.base_cotizacion_cents, 17_004 * 14);
+    }
+
+    #[test]
+    fn los_grupos_diarios_respetan_el_tope_mensual_en_mes_completo() {
+        let mut e = empleado();
+        e.grupo_cotizacion = GrupoCotizacion::Grupo8;
+        e.salario_bruto_anual_cents = 1_200_000; // 100.000 céntimos al mes
+
+        // Enero tiene 31 días, pero con salario mensual la base mínima se
+        // ajusta a 30 días, no a 31.
+        let n = Nomina::calcular(&e, 25, 2026, 1);
+        assert_eq!(n.base_cotizacion_cents, 4_748 * 30);
+
+        // El máximo mensual es 5.101,20: no se multiplica 170,04 por 31.
+        e.salario_bruto_anual_cents = 12_000_000; // 1.000.000 céntimos al mes
+        for (anyo, tope) in [(2026, 510_120), (2025, 490_950), (2024, 472_050)] {
+            e.fecha_alta = NaiveDate::from_ymd_opt(anyo, 1, 1).unwrap();
+            let n = Nomina::calcular(&e, 26, anyo, 1);
+            assert_eq!(n.base_cotizacion_cents, tope);
+        }
+
+        // También en febrero completo se aplica el tope mensual, no el diario
+        // multiplicado por 28.
+        e.fecha_alta = NaiveDate::from_ymd_opt(2026, 1, 1).unwrap();
+        let n = Nomina::calcular(&e, 27, 2026, 2);
+        assert_eq!(n.base_cotizacion_cents, 510_120);
+    }
+
+    #[test]
+    fn un_empleado_antiguo_sin_grupo_se_lee_como_grupo_siete() {
+        let mut valor = serde_json::to_value(empleado()).expect("serializa el empleado");
+        valor
+            .as_object_mut()
+            .expect("objeto JSON")
+            .remove("grupo_cotizacion");
+        let leido: Empleado = serde_json::from_value(valor).expect("lee el empleado antiguo");
+        assert_eq!(leido.grupo_cotizacion, GrupoCotizacion::Grupo7);
+    }
+
+    #[test]
+    fn una_nomina_antigua_sin_base_se_lee_sin_romperse() {
+        let mut valor =
+            serde_json::to_value(Nomina::calcular(&empleado(), 30, 2026, 1)).expect("serializa");
+        let objeto = valor.as_object_mut().expect("objeto JSON");
+        objeto.remove("base_cotizacion_cents");
+        objeto.remove("grupo_cotizacion");
+        let leida: Nomina = serde_json::from_value(valor).expect("lee la nómina antigua");
+        assert_eq!(leida.base_cotizacion_cents, 0);
+        assert_eq!(leida.grupo_cotizacion, GrupoCotizacion::Grupo7);
+    }
+
+    #[test]
+    fn prorratea_febrero_por_dias_naturales() {
+        let mut e = empleado();
+        e.fecha_alta = NaiveDate::from_ymd_opt(2026, 2, 15).unwrap();
+        let n = Nomina::calcular(&e, 11, 2026, 2);
+
+        assert_eq!((n.dias_trabajados, n.dias_mes), (14, 28));
+        assert_eq!(n.bruto_cents, 100_000);
+        assert_eq!(n.ss_empleado_cents, 6_480);
+        assert_eq!(n.irpf_cents, 15_000);
+        assert_eq!(n.neto_cents, 78_520);
+        assert_eq!(n.ss_empresa_cents, 32_070);
+        assert_eq!(n.coste_empresa_cents, 132_070);
+    }
+
+    #[test]
+    fn febrero_bisiesto_usa_veintinueve_dias() {
+        let mut e = empleado();
+        e.fecha_alta = NaiveDate::from_ymd_opt(2024, 2, 15).unwrap();
+        let n = Nomina::calcular(&e, 12, 2024, 2);
+
+        assert_eq!((n.dias_trabajados, n.dias_mes), (15, 29));
+        assert_eq!(n.bruto_cents, div_round(200_000 * 15, 29));
+    }
+
+    #[test]
+    fn alta_y_baja_en_los_extremos_incluyen_ambos_dias() {
+        // Alta el primer día y sin baja: mes completo de febrero.
+        let mut e = empleado();
+        e.fecha_alta = NaiveDate::from_ymd_opt(2026, 2, 1).unwrap();
+        let n = Nomina::calcular(&e, 13, 2026, 2);
+        assert_eq!((n.dias_trabajados, n.dias_mes), (28, 28));
+        assert_eq!(n.bruto_cents, 200_000);
+
+        // Baja el último día: también mes completo.
+        e.fecha_alta = NaiveDate::from_ymd_opt(2026, 1, 1).unwrap();
+        e.fecha_baja = Some(NaiveDate::from_ymd_opt(2026, 2, 28).unwrap());
+        let n = Nomina::calcular(&e, 14, 2026, 2);
+        assert_eq!((n.dias_trabajados, n.dias_mes), (28, 28));
+        assert_eq!(n.bruto_cents, 200_000);
+
+        // Alta el último día: un solo día.
+        e.fecha_alta = NaiveDate::from_ymd_opt(2026, 2, 28).unwrap();
+        e.fecha_baja = None;
+        let n = Nomina::calcular(&e, 15, 2026, 2);
+        assert_eq!((n.dias_trabajados, n.dias_mes), (1, 28));
+        assert_eq!(n.bruto_cents, div_round(200_000, 28));
+
+        // Baja el primer día: un solo día.
+        e.fecha_alta = NaiveDate::from_ymd_opt(2026, 1, 1).unwrap();
+        e.fecha_baja = Some(NaiveDate::from_ymd_opt(2026, 2, 1).unwrap());
+        let n = Nomina::calcular(&e, 16, 2026, 2);
+        assert_eq!((n.dias_trabajados, n.dias_mes), (1, 28));
+        assert_eq!(n.bruto_cents, div_round(200_000, 28));
+    }
+
+    #[test]
+    fn el_cambio_de_ano_prorratea_diciembre_y_enero_por_separado() {
+        let mut e = empleado();
+        e.fecha_alta = NaiveDate::from_ymd_opt(2025, 12, 20).unwrap();
+        e.fecha_baja = Some(NaiveDate::from_ymd_opt(2026, 1, 10).unwrap());
+
+        let diciembre = Nomina::calcular(&e, 17, 2025, 12);
+        assert_eq!((diciembre.dias_trabajados, diciembre.dias_mes), (12, 31));
+        assert_eq!(
+            diciembre.bruto_cents,
+            div_round(200_000 * 12, 31)
+        );
+
+        let enero = Nomina::calcular(&e, 18, 2026, 1);
+        assert_eq!((enero.dias_trabajados, enero.dias_mes), (10, 31));
+        assert_eq!(enero.bruto_cents, div_round(200_000 * 10, 31));
+    }
+
+    #[test]
+    fn generar_nominas_mes_aplica_el_prorrateo() {
+        let mut e = empleado();
+        e.fecha_alta = NaiveDate::from_ymd_opt(2026, 2, 15).unwrap();
+        let mut nominas = Vec::new();
+        let mut siguiente_id = 100;
+
+        let (creadas, saltadas) =
+            generar_nominas_mes(&mut nominas, &[e], &mut siguiente_id, 2026, 2)
+                .expect("debe generar la nómina parcial");
+
+        assert_eq!((creadas, saltadas), (1, 0));
+        assert_eq!((nominas[0].dias_trabajados, nominas[0].dias_mes), (14, 28));
+        assert_eq!(nominas[0].bruto_cents, 100_000);
     }
 
     #[test]
