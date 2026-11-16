@@ -6,7 +6,7 @@
 //! Para miles de facturas es de sobra; si algún día hace falta SQL, el modelo
 //! ya está separado y se migra sin tocar la interfaz.
 
-use crate::empleados::{Empleado, Nomina};
+use crate::empleados::{Empleado, EstadoNomina, Nomina};
 use crate::model::*;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -137,6 +137,24 @@ mod tests {
         assert_eq!(db.next_id, 42);
         assert!(db.empleados.is_empty());
         assert!(db.nominas.is_empty());
+    }
+
+    #[test]
+    fn migra_el_booleano_pagada_al_nuevo_estado_de_nomina() {
+        let mut db = Db::default();
+        let mut pagada = Nomina::default();
+        pagada.pagada = true;
+        let mut pendiente = Nomina::default();
+        pendiente.pagada = false;
+        db.nominas.push(pagada);
+        db.nominas.push(pendiente);
+
+        db.migrar_estados_nomina();
+
+        assert_eq!(db.nominas[0].estado, EstadoNomina::Pagada);
+        assert!(db.nominas[0].pagada);
+        assert_eq!(db.nominas[1].estado, EstadoNomina::Borrador);
+        assert!(!db.nominas[1].pagada);
     }
 
     /// Genera una base de trabajo realista y la deja en `.toolchain/carga`
@@ -539,6 +557,7 @@ impl Db {
                     // remite; esta app nunca remitió, así que el cotejo correcto
                     // es el no verificable. No se toca ningún hash.
                     db.migrar_qr_verifactu();
+                    db.migrar_estados_nomina();
                     (db, None)
                 }
                 Err(e) => {
@@ -578,6 +597,18 @@ impl Db {
                     r.qr_url = crate::verifactu::construir_qr_url(r);
                 }
             }
+        }
+    }
+
+    /// Las nóminas anteriores a los estados sólo tenían `pagada`. Si estaban
+    /// pagadas se conservan como `Pagada`; el resto empieza en `Borrador`.
+    /// Así los datos antiguos no se bloquean ni se borran por sorpresa.
+    fn migrar_estados_nomina(&mut self) {
+        for n in &mut self.nominas {
+            if n.estado == EstadoNomina::Borrador && n.pagada {
+                n.estado = EstadoNomina::Pagada;
+            }
+            n.pagada = matches!(n.estado, EstadoNomina::Pagada | EstadoNomina::Cerrada);
         }
     }
 

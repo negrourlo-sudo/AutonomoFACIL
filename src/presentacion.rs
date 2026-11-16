@@ -262,7 +262,7 @@ const GUIA_111: Guia = Guia {
         "Presenta y guarda el justificante; el 190 resume el año y debe cuadrar con los cuatro 111.",
     ],
     fichero: "Admite fichero con el diseño de registro oficial, cómodo si hay muchos empleados; el formulario sirve para pocos.",
-    aviso: "Plazo: 1–20 del mes siguiente a cada trimestre. Este borrador de AutónomoFACIL sólo suma las nóminas generadas: 01 perceptores, 02 percepciones íntegras (bruto) y 03 retenciones. La base de cotización no se usa en el 111. No incluye facturas de profesionales, rentas en especie, regularizaciones ni otros pagos; si no hay nóminas ni retenciones, no se presenta.",
+    aviso: "Plazo: 1–20 del mes siguiente a cada trimestre. Este borrador de AutónomoFACIL sólo suma las nóminas generadas: 01 perceptores, 02 percepciones íntegras (bruto) y 03 retenciones. La base de cotización no se usa en el 111. No incluye facturas de profesionales, rentas en especie ni otros pagos; los recibos de diferencias se suman al periodo en que se registran. Si no hay nóminas ni retenciones, no se presenta.",
 };
 
 const GUIA_115: Guia = Guia {
@@ -299,7 +299,7 @@ const GUIA_190: Guia = Guia {
         "Presenta y guarda el justificante antes del 31 de enero.",
     ],
     fichero: "Admite fichero TGVI con el diseño de registro anual.",
-    aviso: "Sólo si has presentado el 111. Este borrador se calcula con las nóminas generadas: 01 percepciones (nóminas), 02 percepciones íntegras (bruto), 03 retenciones y P personas distintas. La base de cotización no se usa. No incluye facturas de profesionales, rentas en especie ni otras rentas; revisa NIF y que cuadre con los cuatro 111 del año.",
+    aviso: "Sólo si has presentado el 111. Este borrador se calcula con las nóminas generadas: 01 percepciones (nóminas), 02 percepciones íntegras (bruto), 03 retenciones y P personas distintas. La base de cotización no se usa. No incluye facturas de profesionales, rentas en especie ni otras rentas; los recibos de diferencias se suman al periodo en que se registran. Revisa NIF y que cuadre con los cuatro 111 del año.",
 };
 
 const GUIA_180: Guia = Guia {

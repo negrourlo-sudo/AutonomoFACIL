@@ -7,7 +7,7 @@ módulo de **empleados y nóminas** para autónomos con trabajadores y sociedade
 Sin Electron, sin WebView, sin Node y sin toolchain de C: una ventana nativa
 (egui/eframe) y un ejecutable.
 
-Versión actual: **0.7.3**. La corrección de una factura emitida se hace con una
+Versión actual: **0.7.6**. La corrección de una factura emitida se hace con una
 **R1 por diferencias**; no se borra ni se anula la original.
 
 ---
@@ -164,8 +164,9 @@ la fecha ya lo hace.
 bases mensuales; los grupos 8 a 11 usan bases diarias, con ajuste a 30 días en
 meses completos. No cambia el salario.
 - **Salario bruto anual:** es el bruto antes de Seguridad Social e IRPF,
-repartido en **12 pagas**. La nómina ordinaria es el anual entre 12; no se
-calculan pagas extras separadas.
+repartido en **12 pagas**. La nómina ordinaria es el anual entre 12. Las pagas
+extras, horas extra, variables y demás incidencias se añaden después con el
+editor de **Conceptos** de cada borrador.
 - **IRPF:** es el porcentaje de retención que se aplica al bruto. No es una
 cotización: la Seguridad Social se calcula aparte, sobre la base de cotización.
 
@@ -179,15 +180,64 @@ a su baja. Si ya existe la nómina de ese empleado y mes, no se duplica.
 Cada nómina guarda una copia de los datos laborales (nombre, NIF, NAF, puesto y
 contrato), los días trabajados y del mes, el bruto, la base de cotización
 aplicada, la Seguridad Social del trabajador, el IRPF, el neto, la Seguridad
-Social de la empresa y el coste total. Se puede marcar como pagada y descargar
-un **PDF de resumen de nómina**, marcado como borrador y no oficial. La tabla
-muestra además el IRPF retenido del trimestre (para el **111**) y del año (para
-el **190**).
+Social de la empresa y el coste total. También guarda un **expediente de
+cálculo** con las entradas, los topes, las líneas de cotización, las fórmulas y
+una huella SHA-256 para detectar cambios. La tabla muestra además el IRPF
+retenido del trimestre (para el **111**) y del año (para el **190**).
 
-### 3. Revisa y cierra el recibo
+### 3. Añade conceptos e incidencias del mes
+
+Cada fila de la pestaña **Nóminas** tiene el botón **«Conceptos»** mientras la
+nómina esté en **Borrador**. La ventana permite introducir:
+
+- **Pagas extras:** importe devengado en el mes. Suma al bruto, a la base de
+  cotización (con los topes del grupo) y al IRPF.
+- **Horas extra:** importe. Se aplican los tipos generales del paquete; la app
+  no calcula la cotización adicional específica de horas extra.
+- **Variables y complementos:** bonus, incentivos u otros complementos
+  variables. Suman al bruto y a la base.
+- **Vacaciones:** días informativos e importe de compensación. Si las
+  vacaciones ya están incluidas en el salario, deja el importe a cero; los días
+  no reducen el salario por sí solos.
+- **Bajas:** días informativos e importe de descuento. El descuento resta del
+  bruto y de la base; la app no calcula automáticamente la prestación de IT.
+- **Otras deducciones:** anticipos, cuotas sindicales u otras deducciones.
+  Restan del neto, pero no del bruto, de la base ni del IRPF.
+
+La ventana muestra en tiempo real el **bruto, la base, el neto y el coste de
+empresa** actuales y con los conceptos, con la diferencia. **Guardar y
+recalcular** sustituye el cálculo del borrador, actualiza su expediente y deja
+registrada una copia de los conceptos en la nómina. En una nómina revisada,
+aprobada, pagada o cerrada el botón queda bloqueado: se corrige con un recibo
+de diferencias.
+
+### 4. Revisa, aprueba y cierra el recibo
+
+Cada nómina recorre estos estados, siempre hacia delante:
+
+```text
+Borrador → Revisada → Aprobada → Pagada → Cerrada
+```
+
+- En **Borrador** se puede borrar. A partir de **Revisada** el botón de borrado
+  queda bloqueado para conservar el ciclo.
+- **Nómina explicada** abre el expediente guardado: entradas, base mínima y
+  máxima, cada cotización, IRPF, neto, coste y la huella del cálculo. No
+  recalcula ni modifica nada.
+- Al llegar a **Cerrada** la nómina y su expediente quedan inmutables. No se
+  puede borrar ni cambiar de estado.
+
+### Recibo de diferencias
+
+Si hay que corregir una nómina ya cerrada, no se edita el original. Desde
+**Nómina explicada** se pulsa **«Crear recibo de diferencias»** y se indican
+sólo los importes de la corrección (bruto, Seguridad Social del trabajador,
+IRPF y Seguridad Social de la empresa). Pueden ser positivos o negativos. El
+recibo nuevo queda enlazado al original, empieza en **Borrador** y recorre los
+mismos estados. El original no se toca.
 
 La tabla muestra los días, el bruto, la Seguridad Social del trabajador, el
-IRPF, el neto, el coste de empresa y el estado de pago. Pasa el cursor por las
+IRPF, el neto, el coste de empresa y el estado. Pasa el cursor por las
 cabeceras para ver qué significa cada columna y por el bruto para consultar la
 base de cotización aplicada. El botón **PDF** descarga un resumen de trabajo:
 no es el recibo oficial de salarios ni el boletín de cotización.
@@ -209,11 +259,17 @@ La fórmula del bruto es:
 ```text
 bruto mensual = salario anual / 12
 bruto del mes = bruto mensual × días naturales / días reales del mes
+bruto con conceptos = bruto del mes + pagas extras + horas extra
+                    + variables + compensación de vacaciones - descuento por baja
+base de cotización = bruto con conceptos, limitado por el grupo
+neto = bruto con conceptos - SS trabajador - IRPF - otras deducciones
+coste de empresa = bruto con conceptos + SS empresa
 ```
 
 El resultado se redondea al céntimo. Si el mes está completo se usa el bruto
-mensual entero. Las nóminas creadas antes de esta versión no guardan los días y
-conservan su importe; el PDF muestra los días cuando están disponibles.
+mensual entero. El bruto con conceptos no puede quedar por debajo de cero. Las nóminas creadas antes de esta versión no guardan los días ni
+el expediente y conservan su importe; el PDF muestra los días cuando están
+disponibles.
 
 ### Bases de cotización
 
@@ -254,6 +310,28 @@ como base. Los datos antiguos sin grupo se interpretan como **grupo 7**
 (auxiliares administrativos) hasta que se cambie en la ficha; las nóminas
 antiguas que no guardaban base conservan una base 0 y no se recalculan.
 
+### Paquetes anuales de parámetros
+
+Los tipos y las bases no están escritos en el motor: cada ejercicio tiene un
+paquete JSON versionado en `parametros/nomina/2024.json`,
+`parametros/nomina/2025.json` y `parametros/nomina/2026.json`. Cada paquete
+incluye su año, versión, fecha de vigencia, fuente y URL oficial, las bases de
+los once grupos, los tipos generales y la estimación de AT/EP. El programa
+embebe esos ficheros para seguir siendo un único ejecutable, pero el cálculo
+sólo lee el paquete del ejercicio.
+
+Cada nómina guarda una **copia del paquete usado** en su campo `paquete`; la
+vista «Nómina explicada» y el PDF muestran su versión y fuente. Así una nómina
+antigua no cambia si en el futuro se publica otra versión del paquete. Las
+nóminas generadas antes de esta versión no tienen paquete y se muestran como
+tales; no se recalculan.
+
+`parametros/nomina/casos-validados.json` contiene casos contrastados con las
+órdenes de cotización y las tablas oficiales de 2024, 2025 y 2026. La suite de
+pruebas ejecuta esos casos contra el motor y comprueba bases, cotización del
+trabajador, cotización de la empresa sin AT/EP y total con la estimación de
+AT/EP. Las fuentes oficiales están enlazadas en cada caso.
+
 ### 111 y 190 desde las nóminas
 
 Desde la propia pestaña **Nóminas** (y también desde **Modelos e impuestos**)
@@ -271,7 +349,8 @@ se pueden preparar los dos modelos:
 Cada botón escribe un **PDF borrador** y un **JSON** en
 `export\<empresa>\Modelos\`, con el modelo, el año, el periodo y la empresa en el
 nombre. El PDF lleva las casillas, el resumen y una tabla de detalle; el JSON
-sirve para revisarlo o pasárselo al gestor.
+sirve para revisarlo o pasárselo al gestor. Los recibos de diferencias se
+suman al periodo en el que se registran, con el signo de la corrección.
 
 **Límites importantes:** el cálculo usa **sólo las nóminas generadas en
 AutónomoFACIL**. No incluye facturas de profesionales con retención (casillas
@@ -280,26 +359,32 @@ otras rentas. Tampoco presenta nada en la AEAT: son borradores para revisar y
 teclear o importar en la Sede. Antes de presentar, comprueba que cada perceptor
 tiene un NIF válido y que el 190 cuadra con los cuatro 111 del año.
 
-La estimación usa 12 pagas y los tipos generales de 2026:
+La estimación usa 12 pagas y el paquete anual del ejercicio. Tipos generales
+del Régimen General:
 
-- Trabajador: contingencias comunes 4,70 %, desempleo 1,55 % indefinido o
-  1,60 % temporal, formación 0,10 % y MEI 0,13 %.
-- Empresa: contingencias comunes 23,60 %, desempleo 5,50 % o 6,70 %, FOGASA
-  0,20 %, formación 0,60 %, MEI 0,67 % y una estimación de AT/EP del 1,50 %.
+| Ejercicio | Trabajador indefinido | Trabajador temporal | Empresa indefinido* | Empresa temporal* | MEI trabajador / empresa |
+|---|---:|---:|---:|---:|---:|
+| 2024 | 6,47 % | 6,52 % | 31,98 % | 33,18 % | 0,12 % / 0,58 % |
+| 2025 | 6,48 % | 6,53 % | 32,07 % | 33,27 % | 0,13 % / 0,67 % |
+| 2026 | 6,50 % | 6,55 % | 32,15 % | 33,35 % | 0,15 % / 0,75 % |
+
+\* Incluye la estimación de AT/EP del 1,50 %, que no es un tipo general: la
+tarifa oficial depende de la actividad. El paquete marca esta estimación y la
+vista de la nómina lo advierte.
 
 La Seguridad Social del trabajador y de la empresa se calcula sobre la **base
 de cotización**, no sobre el bruto. El IRPF se calcula sobre el **bruto**. Las
 fórmulas del recibo son:
 
 ```text
-SS trabajador = base de cotización × 6,48 % (indefinido) o 6,53 % (temporal)
-SS empresa = base de cotización × 32,07 % (indefinido) o 33,27 % (temporal)
+SS trabajador = base de cotización × tipo del paquete (6,50 % indefinido en 2026)
+SS empresa = base de cotización × tipo del paquete (32,15 % indefinido en 2026)*
 IRPF = bruto × porcentaje de la ficha
 neto = bruto - SS trabajador - IRPF
 coste de empresa = bruto + SS empresa
 ```
 
-Los porcentajes son los tipos generales de 2026 que usa la estimación; no
+\* La empresa incluye la estimación de AT/EP del paquete. Los porcentajes no
 incluyen bonificaciones, tramos personales, regularizaciones ni el boletín de
 cotización. **No es una nómina oficial**: sirve para presupuestar el coste de
 una persona y anticipar las retenciones. El recibo y la presentación se revisan
@@ -323,7 +408,7 @@ cargo run --release
 ```
 
 Datos en `%APPDATA%\AutonomoFACIL\datos.json` (escritura atómica + `.bak`).
-Exportaciones organizadas en `%APPDATA%\AutonomoFACIL\export\<empresa>\`: `Facturas`, `Presupuestos`, `Proformas`, `Nominas`, `Modelos` y `Contabilidad`, con una subcarpeta por cliente o empleado.
+Exportaciones organizadas en `%APPDATA%\AutonomoFACIL\export\<empresa>\`: `Facturas`, `Presupuestos` y `Proformas` guardan una subcarpeta por cliente (el PDF y el FacturaE del mismo documento van juntos); `Nominas`, una por empleado; y `Modelos` y `Contabilidad` guardan sus PDF, JSON, CSV o TXT directamente en su carpeta.
 
 Pruebas:
 
@@ -364,18 +449,159 @@ winget install --id NSIS.NSIS -e --accept-package-agreements --accept-source-agr
 
 ### Qué hace el instalador
 
-1. Copia la aplicación a `%LOCALAPPDATA%\Programs\AutonomoFACIL`.
-2. Crea accesos directos en el menú Inicio y en el escritorio, con icono.
-3. Se registra en **Agregar o quitar programas** de Windows (HKCU).
-4. Deja un `Desinstalar.exe` que borra accesos, registro y carpeta del programa.
-5. Al desinstalar, muestra una casilla **sin marcar** para borrar también datos, exportaciones, nóminas, copias y la carpeta antigua `Facturacion` si existe.
-6. Muestra la licencia antes de instalar.
+1. Comprueba que **AutónomoFACIL esté cerrado**. Si está abierto, pide cerrarlo
+   y reintentar; en modo silencioso aborta en vez de tocar un ejecutable en uso.
+2. Si ya hay una instalación, guarda una **copia previa** del programa en
+   `%TEMP%\AutonomoFACIL-backup-<versión>`. Si falla la copia de ficheros,
+   cancela antes de modificar nada.
+3. Copia la aplicación a `%LOCALAPPDATA%\Programs\AutonomoFACIL`.
+4. Crea accesos directos en el menú Inicio y en el escritorio, usando el
+   **icono incrustado en el .exe**; también deja `icono.ico` como respaldo.
+5. Se registra en **Agregar o quitar programas** de Windows (HKCU).
+6. Deja un `Desinstalar.exe` que borra accesos, registro y carpeta del programa.
+7. Si se cancela o falla la instalación después de empezar, **restaura la copia
+   anterior** y, si la instalación era nueva, elimina sólo los ficheros que había
+   creado. Los datos de `%APPDATA%` no se tocan.
+8. Al desinstalar, muestra una casilla **sin marcar** para borrar también datos,
+   exportaciones, nóminas, copias y la carpeta antigua `Facturacion` si existe.
+9. Muestra la licencia antes de instalar.
+
+El instalador no borra la carpeta elegida con `RMDir /r`: en el rollback sólo se
+tocan los tres ficheros de la aplicación (ejecutable, icono y desinstalador). Si
+ya existían en una carpeta compartida, se guardan antes y se restauran; los
+demás ficheros de la carpeta no se modifican.
 
 **Tus datos no se borran por defecto al desinstalar**: quedan en
 `%APPDATA%\AutonomoFACIL`. El desinstalador permite borrarlos de forma opcional
 marcando esa casilla; si se marca, también elimina la carpeta antigua
 `%APPDATA%\Facturacion` y la eliminación es permanente. En una desinstalación
 silenciosa (`/S`) la página no se muestra y los datos se conservan.
+
+### Firma Authenticode (opcional)
+
+El script firma `dist/autonomofacil.exe` **antes** de incrustarlo en el
+instalador y vuelve a firmar `dist/AutonomoFACIL-NSIS.exe` al final. Sin
+certificado no falla: genera el paquete sin firmar y muestra un aviso. La firma
+es opcional para compilar, pero necesaria para distribuir sin el aviso de
+“editor desconocido”.
+
+Necesitas un certificado de firma de código **OV o EV** de una CA reconocida y
+`signtool.exe` del Windows SDK. Hay dos formas de decirle al script dónde está
+la clave; **elige una**, no las dos.
+
+#### A. Certificado del almacén de Windows (token, HSM o nube)
+
+Es la ruta para los certificados actuales, cuya clave privada no se puede
+exportar y vive en un token USB, un HSM o un servicio cloud. Funciona si el
+fabricante instala el certificado en el almacén de Windows mediante su
+middleware o un adaptador CNG/KSP; por ejemplo, un token SafeNet/YubiKey o un
+adaptador cloud como eSigner CKA. Después `signtool` firma con `/sha1` y el
+token/HSM/servicio pide el PIN, OTP o confirmación.
+
+1. Instala el software del token/HSM/servicio, conecta el dispositivo y
+   comprueba que el certificado tiene la EKU **Code Signing**.
+2. Localiza la huella SHA-1 del certificado.
+
+```powershell
+Get-ChildItem Cert:\CurrentUser\My -CodeSigningCert |
+  Format-Table Subject, Thumbprint, NotAfter
+```
+
+Si está en el almacén del equipo:
+
+```powershell
+Get-ChildItem Cert:\LocalMachine\My -CodeSigningCert |
+  Format-Table Subject, Thumbprint, NotAfter
+```
+
+3. Exporta la huella y, si está en el almacén de equipo, el almacén:
+
+```bash
+export AUTONOMOFACIL_CERT_SHA1="0123456789ABCDEF0123456789ABCDEF01234567"
+export AUTONOMOFACIL_CERT_STORE="usuario"   # o "maquina"
+bash empaquetar-nsis.sh
+```
+
+La huella puede copiarse con espacios o en minúsculas: el script la normaliza.
+Debe ser una huella **SHA-1 de 40 caracteres hexadecimales**, que es la que
+selecciona `/sha1`; una huella SHA-256 de 64 caracteres no vale.
+
+#### B. PFX exportable (certificados antiguos)
+
+Si tu CA te entrega un PFX con clave privada exportable:
+
+```bash
+export AUTONOMOFACIL_CERT_PFX="/ruta/segura/AutonomoFACIL.pfx"
+export AUTONOMOFACIL_CERT_PASSWORD="la-contraseña-del-pfx"
+bash empaquetar-nsis.sh
+```
+
+El PFX y su contraseña **no se guardan en el repositorio** ni se imprimen por
+pantalla; mantenlos fuera del proyecto. Muchas CA actuales ya no entregan PFX:
+si el certificado está en token/HSM, usa la ruta A.
+
+#### Variables
+
+| Variable | Cuándo se usa | Contenido |
+|---|---|---|
+| `AUTONOMOFACIL_CERT_SHA1` | Ruta A | Huella SHA-1 de 40 caracteres; puede llevar espacios o minúsculas. |
+| `AUTONOMOFACIL_CERT_STORE` | Ruta A | `usuario` (por defecto) o `maquina`; con `maquina` se añade `/sm`. |
+| `AUTONOMOFACIL_CERT_PFX` | Ruta B | Ruta al PFX exportable. |
+| `AUTONOMOFACIL_CERT_PASSWORD` | Ruta B | Contraseña del PFX. |
+| `AUTONOMOFACIL_TIMESTAMP_URL` | Ambas | Sello de tiempo; por defecto `http://timestamp.digicert.com`. |
+| `AUTONOMOFACIL_SIGNTOOL` | Ambas | Ruta completa a `signtool.exe` si no está en el PATH. |
+
+#### Flujo completo
+
+1. `empaquetar-nsis.sh` compila `dist/autonomofacil.exe`.
+2. Lo firma con el certificado elegido y comprueba la firma con
+   `signtool verify /pa`.
+3. Compila el instalador NSIS con ese ejecutable ya firmado.
+4. Firma `dist/AutonomoFACIL-NSIS.exe` y vuelve a verificar.
+5. Muestra en pantalla el modo usado (almacén o PFX), pero nunca la contraseña.
+
+El orden importa: si firmas sólo el instalador, el `.exe` que lleva dentro
+sigue sin firma. No ejecutes `empaquetar-nsis.sh` otra vez sin certificado
+después de firmar a mano, porque reemplazaría la aplicación firmada por una
+sin firmar.
+
+#### Comprobar la firma
+
+```bash
+signtool verify /pa /v dist/autonomofacil.exe
+signtool verify /pa /v dist/AutonomoFACIL-NSIS.exe
+```
+
+O desde PowerShell:
+
+```powershell
+Get-AuthenticodeSignature .\dist\AutonomoFACIL-NSIS.exe |
+  Format-List Status, StatusMessage, SignerCertificate, TimeStamperCertificate
+```
+
+Debe aparecer `Status: Valid`, el certificado del firmante y el sello de
+tiempo. El sello permite que la firma siga siendo válida cuando caduque el
+certificado.
+
+#### Límites y avisos
+
+- Un servicio cloud que sólo firme mediante su API y no publique el certificado
+  en el almacén de Windows no funciona con `/sha1`; usa la herramienta del
+  proveedor. Es el caso, por ejemplo, de Azure Trusted Signing o de algunas
+  modalidades de KeyLocker sin integración CNG.
+- Un certificado OV puede seguir mostrando avisos de SmartScreen hasta que
+  Windows acumule reputación; uno EV suele ayudar antes, pero no lo garantiza.
+- La firma no cambia el contenido del instalador: sólo acredita quién lo firmó.
+- Si no defines ninguna de las dos rutas, el paquete se genera sin firma y
+  Windows puede mostrar “editor desconocido”.
+
+### Icono del ejecutable
+
+`build.rs` compila `recursos/icono.rc` con `windres` y enlaza el icono en el PE.
+Busca `WINDRES`, el toolchain local `.toolchain/mingw64/bin` y las rutas
+habituales de MinGW/MSYS2; si no lo encuentra, avisa y el build sigue sin icono.
+Los accesos directos y `DisplayIcon` apuntan al `.exe` (índice 0), no al `.ico`
+suelto; el `.ico` se conserva como respaldo y para el desinstalador.
 
 ### El arte del asistente
 
@@ -393,12 +619,9 @@ ANSI y rompe los acentos.
 
 ### Pendiente para distribuir de verdad
 
-- **Firma de código.** Sin certificado, Windows SmartScreen avisa de que el
-  editor es desconocido. Se arregla con un certificado EV/OV y `signtool`.
-- **Icono del ejecutable.** El instalador y los accesos directos usan
-  `icono.ico`, pero el `.exe` no lleva un icono incrustado; Windows muestra el
-  genérico. Se arregla con un recurso `.rc` y recompilando.
 - **Actualizaciones.** No hay comprobación de versión ni autoactualización.
+- **Reputación de SmartScreen.** Aunque el paquete esté firmado, un certificado
+  OV nuevo puede tardar en ganar reputación; SmartScreen puede seguir avisando.
 
 ---
 
@@ -433,6 +656,23 @@ Decisiones que conviene conocer:
   (cubre á é í ó ú ñ ü ¿ ¡ €). Cero dependencias, cero binarios nativos.
 - **El cliente se congela al emitir.** Editar después su ficha no cambia una
   factura ya emitida.
+
+---
+
+## Accesibilidad
+
+Esta aplicación es **nativa de escritorio** (egui/eframe): no incluye una interfaz web, HTML ni un servidor. Por eso **WCAG y WAI-ARIA no son estándares aplicables tal cual** y no se puede afirmar que el proyecto «pase WCAG»: WAI-ARIA necesita un árbol DOM y aquí no existe. El equivalente nativo es exponer la interfaz a la API de accesibilidad del sistema; en Windows, UI Automation mediante AccessKit.
+
+Lo que sí incorpora esta versión:
+
+- **AccessKit activado** en eframe (`Cargo.toml`). Windows puede exponer botones, campos, listas y la navegación a Narrador/NVDA a través de UI Automation.
+- **Navegación lateral con nombre y estado** para lectores de pantalla; los iconos de ayuda anuncian su tema.
+- **Etiquetas de formulario asociadas** a los campos que usan el componente común `campo_h`.
+- **Zoom de interfaz** al 80–160 % desde la barra superior; el tamaño se guarda.
+- **Perfil de rendimiento bajo** sin animaciones ni sombras, útil para reducir movimiento; se puede elegir en Ajustes o con `AUTONOMOFACIL_PERFIL=bajo`.
+- Atajos existentes `Ctrl+S` (guardar), `Ctrl+Enter` (guardar y emitir) y `Esc` para cancelar diálogos.
+
+**Pendiente de una auditoría real:** no se ha probado con Narrador, NVDA ni VoiceOver, no hay un recorrido de foco certificado y los PDF exportados **no están etiquetados como PDF/UA** (el generador PDF es propio y no incluye árbol de estructura). Para accesibilidad web habría que construir una interfaz HTML separada; no se ha hecho.
 
 ---
 

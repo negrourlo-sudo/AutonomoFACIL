@@ -1,0 +1,97 @@
+{
+  "anyo": 2026,
+  "version": "2026.1",
+  "vigente_desde": "2026-01-01",
+  "publicado": "2026-03-30",
+  "fuente": "Orden PJC/297/2026, de 30 de marzo (BOE)",
+  "url_fuente": "https://www.boe.es/eli/es/o/2026/03/30/pjc297/con",
+  "tope_maximo_mensual_cents": 510120,
+  "bases_por_grupo": [
+    {
+      "grupo": 1,
+      "diaria": false,
+      "minima_cents": 198930,
+      "maxima_cents": 510120
+    },
+    {
+      "grupo": 2,
+      "diaria": false,
+      "minima_cents": 164970,
+      "maxima_cents": 510120
+    },
+    {
+      "grupo": 3,
+      "diaria": false,
+      "minima_cents": 143520,
+      "maxima_cents": 510120
+    },
+    {
+      "grupo": 4,
+      "diaria": false,
+      "minima_cents": 142440,
+      "maxima_cents": 510120
+    },
+    {
+      "grupo": 5,
+      "diaria": false,
+      "minima_cents": 142440,
+      "maxima_cents": 510120
+    },
+    {
+      "grupo": 6,
+      "diaria": false,
+      "minima_cents": 142440,
+      "maxima_cents": 510120
+    },
+    {
+      "grupo": 7,
+      "diaria": false,
+      "minima_cents": 142440,
+      "maxima_cents": 510120
+    },
+    {
+      "grupo": 8,
+      "diaria": true,
+      "minima_cents": 4748,
+      "maxima_cents": 17004
+    },
+    {
+      "grupo": 9,
+      "diaria": true,
+      "minima_cents": 4748,
+      "maxima_cents": 17004
+    },
+    {
+      "grupo": 10,
+      "diaria": true,
+      "minima_cents": 4748,
+      "maxima_cents": 17004
+    },
+    {
+      "grupo": 11,
+      "diaria": true,
+      "minima_cents": 4748,
+      "maxima_cents": 17004
+    }
+  ],
+  "tipos": {
+    "contingencias_comunes_empleado_pb": 470,
+    "contingencias_comunes_empresa_pb": 2360,
+    "desempleo_indefinido_empleado_pb": 155,
+    "desempleo_indefinido_empresa_pb": 550,
+    "desempleo_temporal_empleado_pb": 160,
+    "desempleo_temporal_empresa_pb": 670,
+    "formacion_empleado_pb": 10,
+    "formacion_empresa_pb": 60,
+    "fogasa_empresa_pb": 20,
+    "mei_empleado_pb": 15,
+    "mei_empresa_pb": 75
+  },
+  "at_ep_empresa_pb": 150,
+  "at_ep_estimado": true,
+  "notas": [
+    "Incluye los tipos generales del Régimen General; no aplica bonificaciones, reducciones ni la cotización adicional de solidaridad.",
+    "MEI 2026: 0,90 % total (0,15 % trabajador y 0,75 % empresa).",
+    "AT/EP se incluye como estimación de oficina al 1,50 %; la tarifa oficial depende de la actividad."
+  ]
+}

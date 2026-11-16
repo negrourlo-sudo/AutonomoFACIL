@@ -581,6 +581,13 @@ fn pie(p: &mut Pagina, doc: &Documento, empresa: &Empresa, pagina: usize, total:
     );
 }
 
+/// Formatea una deducción con su signo: en un recibo de diferencias una
+/// deducción negativa devuelve dinero y se muestra con «+».
+fn deduccion(cents: i64, diferencia: bool) -> String {
+    let signo = if diferencia && cents < 0 { "+" } else { "-" };
+    format!("{signo}{}", fmt_cents_eur(cents.saturating_abs()))
+}
+
 /// Resumen de nómina sencillo. Es un documento de trabajo, no el modelo
 /// oficial de nómina ni el boletín de cotización.
 pub fn nomina(n: &Nomina, e: &Empleado, empresa: &Empresa) -> Vec<u8> {
@@ -591,14 +598,18 @@ pub fn nomina(n: &Nomina, e: &Empleado, empresa: &Empresa) -> Vec<u8> {
     // separada del título, para que se vea incluso al imprimir en blanco y
     // negro y no se confunda con un recibo oficial.
     p.rect(DERECHA - 150.0, 28.0, 150.0, 16.0, 0.18);
-    p.texto_der(
-        DERECHA - 6.0,
-        39.0,
-        8.5,
-        true,
-        1.0,
-        "BORRADOR · NO OFICIAL",
-    );
+    let marca = if n.tipo.diferencia() {
+        if n.cerrada() {
+            "DIFERENCIAS · CERRADA"
+        } else {
+            "DIFERENCIAS · BORRADOR"
+        }
+    } else if n.cerrada() {
+        "CERRADA · NO OFICIAL"
+    } else {
+        "BORRADOR · NO OFICIAL"
+    };
+    p.texto_der(DERECHA - 6.0, 39.0, 8.5, true, 1.0, marca);
 
     let mut y = MARGEN + 14.0;
     p.texto(
@@ -613,7 +624,18 @@ pub fn nomina(n: &Nomina, e: &Empleado, empresa: &Empresa) -> Vec<u8> {
             empresa.nombre.to_uppercase()
         },
     );
-    p.texto_der(DERECHA, y, 16.0, true, 0.10, "RESUMEN DE NÓMINA");
+    p.texto_der(
+        DERECHA,
+        y,
+        16.0,
+        true,
+        0.10,
+        if n.tipo.diferencia() {
+            "RECIBO DE DIFERENCIAS"
+        } else {
+            "RESUMEN DE NÓMINA"
+        },
+    );
     y += 16.0;
     if !empresa.nif.trim().is_empty() {
         p.texto(MARGEN, y, 9.0, false, 0.35, &format!("NIF {}", empresa.nif));
@@ -627,6 +649,16 @@ pub fn nomina(n: &Nomina, e: &Empleado, empresa: &Empresa) -> Vec<u8> {
         format!("Periodo {:02}/{}", n.mes, n.anyo)
     };
     p.texto_der(DERECHA, y, 9.0, false, 0.35, &periodo);
+    if !n.estado.nombre().is_empty() {
+        p.texto(
+            DERECHA - 150.0,
+            y + 12.0,
+            7.5,
+            false,
+            0.45,
+            &format!("Estado: {}", n.estado.nombre()),
+        );
+    }
     y += 18.0;
     p.linea(MARGEN, y, DERECHA, y, 0.5, 0.55);
 
@@ -672,14 +704,95 @@ pub fn nomina(n: &Nomina, e: &Empleado, empresa: &Empresa) -> Vec<u8> {
         ),
     );
 
+    if n.tipo.diferencia() {
+        y += 14.0;
+        p.texto(
+            MARGEN,
+            y,
+            8.5,
+            false,
+            0.35,
+            &format!(
+                "Diferencia de la nómina #{}. {}",
+                n.nomina_origen
+                    .map(|id| id.to_string())
+                    .unwrap_or_else(|| "—".to_string()),
+                n.motivo_diferencia
+            ),
+        );
+    }
+
     y += 24.0;
     p.texto(MARGEN, y, 10.0, true, 0.15, "DEVENGOS");
     p.texto_der(DERECHA, y, 9.0, true, 0.15, "IMPORTE");
     y += 12.0;
     p.linea(MARGEN, y, DERECHA, y, 0.3, 0.75);
     y += 13.0;
-    p.texto(MARGEN, y, 9.0, false, 0.25, "Salario bruto del periodo");
-    p.texto_der(DERECHA, y, 9.0, false, 0.25, &fmt_cents_eur(n.bruto_cents));
+    let conceptos = &n.conceptos;
+    let con_conceptos = n.tipo == crate::empleados::TipoNomina::Ordinaria && !conceptos.vacia();
+    p.texto(
+        MARGEN,
+        y,
+        9.0,
+        false,
+        0.25,
+        if n.tipo.diferencia() {
+            "Diferencia de bruto"
+        } else if con_conceptos {
+            "Salario base del periodo"
+        } else {
+            "Salario bruto del periodo"
+        },
+    );
+    p.texto_der(
+        DERECHA,
+        y,
+        9.0,
+        false,
+        0.25,
+        &fmt_cents_eur(if n.tipo.diferencia() {
+            n.bruto_cents
+        } else {
+            n.salario_base_efectivo()
+        }),
+    );
+    if con_conceptos {
+        let filas = [
+            ("Pagas extras", conceptos.pagas_extras_cents),
+            ("Horas extra", conceptos.horas_extra_cents),
+            ("Variables y complementos", conceptos.variables_cents),
+            (
+                "Vacaciones / compensación",
+                conceptos.vacaciones_cents,
+            ),
+            ("Descuento por baja", -conceptos.bajas_cents),
+        ];
+        for (etiqueta, importe) in filas {
+            if importe == 0 {
+                continue;
+            }
+            y += 12.0;
+            p.texto(MARGEN, y, 9.0, false, 0.25, etiqueta);
+            p.texto_der(DERECHA, y, 9.0, false, 0.25, &fmt_cents_eur(importe));
+        }
+        if conceptos.vacaciones_dias > 0 || conceptos.bajas_dias > 0 {
+            y += 12.0;
+            p.texto(
+                MARGEN,
+                y,
+                8.0,
+                false,
+                0.55,
+                &format!(
+                    "Días informativos: vacaciones {} · baja {}",
+                    conceptos.vacaciones_dias, conceptos.bajas_dias
+                ),
+            );
+        }
+        y += 12.0;
+        p.texto(MARGEN, y, 9.0, true, 0.20, "Bruto total del periodo");
+        p.texto_der(DERECHA, y, 9.0, true, 0.20, &fmt_cents_eur(n.bruto_cents));
+    }
     if n.base_cotizacion_cents > 0 {
         y += 12.0;
         p.texto(MARGEN, y, 9.0, false, 0.25, "Base de cotización (SS)");
@@ -700,20 +813,44 @@ pub fn nomina(n: &Nomina, e: &Empleado, empresa: &Empresa) -> Vec<u8> {
     p.linea(MARGEN, y, DERECHA, y, 0.3, 0.75);
     y += 13.0;
     p.texto(MARGEN, y, 9.0, false, 0.25, "Seguridad Social a cargo del trabajador");
-    p.texto_der(DERECHA, y, 9.0, false, 0.25, &format!("-{}", fmt_cents_eur(n.ss_empleado_cents)));
-    y += 12.0;
-    p.texto(
-        MARGEN,
+    p.texto_der(
+        DERECHA,
         y,
         9.0,
         false,
         0.25,
-        &format!(
+        &deduccion(n.ss_empleado_cents, n.tipo.diferencia()),
+    );
+    y += 12.0;
+    let etiqueta_irpf = if n.tipo.diferencia() {
+        "Retención IRPF (diferencia)".to_string()
+    } else {
+        format!(
             "Retención IRPF {} %",
             fmt_pb(n.irpf_pb.unwrap_or(e.irpf_pb))
-        ),
+        )
+    };
+    p.texto(MARGEN, y, 9.0, false, 0.25, &etiqueta_irpf);
+    p.texto_der(
+        DERECHA,
+        y,
+        9.0,
+        false,
+        0.25,
+        &deduccion(n.irpf_cents, n.tipo.diferencia()),
     );
-    p.texto_der(DERECHA, y, 9.0, false, 0.25, &format!("-{}", fmt_cents_eur(n.irpf_cents)));
+    if !n.tipo.diferencia() && conceptos.deducciones_cents != 0 {
+        y += 12.0;
+        p.texto(MARGEN, y, 9.0, false, 0.25, "Otras deducciones");
+        p.texto_der(
+            DERECHA,
+            y,
+            9.0,
+            false,
+            0.25,
+            &fmt_cents_eur(-conceptos.deducciones_cents),
+        );
+    }
 
     y += 24.0;
     p.linea(MARGEN, y, DERECHA, y, 0.6, 0.35);
@@ -738,6 +875,21 @@ pub fn nomina(n: &Nomina, e: &Empleado, empresa: &Empresa) -> Vec<u8> {
         0.55,
         "Resumen orientativo generado por AutónomoFACIL. No sustituye el recibo oficial de salarios ni el boletín de cotización.",
     );
+    if let Some(paquete) = &n.paquete {
+        p.texto(
+            MARGEN,
+            ALTO - 88.0,
+            7.0,
+            false,
+            0.55,
+            &format!(
+                "Parámetros: paquete anual {} · {} · AT/EP estimado: {}.",
+                paquete.version,
+                paquete.fuente,
+                if paquete.at_ep_estimado { "sí" } else { "no" }
+            ),
+        );
+    }
     p.texto(
         MARGEN,
         ALTO - 64.0,
@@ -1302,6 +1454,38 @@ mod tests {
         assert!(texto.contains("Grupos 1-7"));
         assert!(texto.contains("Grupos 8-11"));
         assert!(texto.contains("No aplica bonificaciones"));
+        assert!(texto.contains("paquete anual 2026.1"));
+    }
+
+    #[test]
+    fn el_pdf_de_nomina_incluye_los_conceptos_del_mes() {
+        use crate::empleados::{ConceptosNomina, Empleado, Nomina};
+        let e = Empleado {
+            id: 3,
+            nombre: "Ana".into(),
+            apellidos: "García".into(),
+            nif: "12345678Z".into(),
+            fecha_alta: NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
+            salario_bruto_anual_cents: 2_400_000,
+            irpf_pb: 1500,
+            ..Default::default()
+        };
+        let n = Nomina::calcular_con_conceptos(
+            &e,
+            3,
+            2026,
+            1,
+            &ConceptosNomina {
+                pagas_extras_cents: 10_000,
+                deducciones_cents: 2_500,
+                ..Default::default()
+            },
+        );
+        let texto = String::from_utf8_lossy(&nomina(&n, &e, &Empresa::default())).to_string();
+        assert!(texto.contains("Salario base del periodo"));
+        assert!(texto.contains("Pagas extras"));
+        assert!(texto.contains("Bruto total del periodo"));
+        assert!(texto.contains("Otras deducciones"));
     }
 
     #[test]

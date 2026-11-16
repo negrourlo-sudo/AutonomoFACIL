@@ -26,7 +26,9 @@ Unicode true
 !include "nsDialogs.nsh"
 
 !define APP_NAME    "AutónomoFACIL"
+!define APP_AUTHOR  "FranciscoNicolás"
 !define APP_EXE     "autonomofacil.exe"
+!define APP_PROC    "autonomofacil"
 ; La versión llega desde `empaquetar-nsis.sh` (que la lee de src/version.rs).
 ; Si se compila a mano, aquí queda el valor por defecto.
 !ifndef APP_VERSION
@@ -56,6 +58,10 @@ BrandingText "${APP_NAME} ${APP_VERSION}  ·  instalación por usuario"
 ; borra si el usuario marca la casilla expresamente.
 Var BorrarDatosCheck
 Var BorrarDatos
+Var CarpetaCopia
+Var RollbackActivo
+Var InstalacionPrevia
+Var VersionPrevia
 
 ; Propiedades del fichero
 VIProductVersion "${APP_VERSION4}"
@@ -63,7 +69,9 @@ VIAddVersionKey "ProductName"     "${APP_NAME}"
 VIAddVersionKey "ProductVersion"  "${APP_VERSION}"
 VIAddVersionKey "FileVersion"     "${APP_VERSION}"
 VIAddVersionKey "FileDescription" "Instalador de ${APP_NAME}: presupuestos y facturas"
-VIAddVersionKey "LegalCopyright"  ""
+VIAddVersionKey "CompanyName"     "${APP_AUTHOR}"
+VIAddVersionKey "Author"          "${APP_AUTHOR}"
+VIAddVersionKey "LegalCopyright"  "© ${APP_AUTHOR}"
 
 ; ---- Arte ------------------------------------------------------------------
 !define MUI_ICON                          "${ARTE}\icono.ico"
@@ -75,6 +83,9 @@ VIAddVersionKey "LegalCopyright"  ""
 !define MUI_HEADERIMAGE_UNBITMAP          "${ARTE}\cabecera.bmp"
 !define MUI_ABORTWARNING
 !define MUI_ABORTWARNING_TEXT             "¿Seguro que quieres cancelar la instalación de ${APP_NAME}?"
+; MUI crea .onUserAbort y un.onUserAbort; le pedimos que llame a nuestro
+; rollback antes de cerrar. Si no hay una instalación a medias, no hace nada.
+!define MUI_CUSTOMFUNCTION_ABORT         "RestaurarCopia"
 
 ; ---- Textos de las páginas ------------------------------------------------
 !define MUI_WELCOMEPAGE_TITLE "Instalar ${APP_NAME} ${APP_VERSION}"
@@ -109,31 +120,208 @@ UninstPage custom un.PaginaDatos un.PaginaDatosSalir
 
 !insertmacro MUI_LANGUAGE "Spanish"
 
+; ---- Comprobaciones y copia de seguridad -----------------------------------
+; Se instala como el usuario actual. Antes de tocar nada se comprueba que la
+; aplicación esté cerrada y se guarda una copia del programa anterior. Si algo
+; falla o el usuario cancela a mitad, se restaura esa copia.
+Function .onInit
+  StrCpy $RollbackActivo "0"
+  StrCpy $InstalacionPrevia "0"
+  StrCpy $VersionPrevia ""
+  StrCpy $CarpetaCopia "$TEMP\AutonomoFACIL-backup-${APP_VERSION4}"
+FunctionEnd
+
+Function ComprobarAppCerrada
+  loop:
+    ; PowerShell viene con Windows y evita falsos positivos de la salida
+    ; localizada de tasklist. 0 = hay una instancia; 1 = no la hay.
+    nsExec::ExecToStack 'powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden -Command "if (Get-Process -Name ${APP_PROC} -ErrorAction SilentlyContinue) { exit 0 } else { exit 1 }"'
+    Pop $0
+    Pop $1
+    StrCmp $0 "0" app_abierta
+    StrCmp $0 "1" app_cerrada
+    ; Si no se pudo comprobar, es más seguro abortar que sobrescribir a ciegas.
+    IfSilent app_deteccion_fallida
+    MessageBox MB_ICONSTOP|MB_OK "No se pudo comprobar si ${APP_NAME} está abierto. Cierra la aplicación y vuelve a ejecutar el instalador."
+    Abort
+  app_deteccion_fallida:
+    SetErrorLevel 1
+    Abort
+  app_cerrada:
+    Return
+  app_abierta:
+    IfSilent app_abierta_silencioso
+    MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "${APP_NAME} está abierto. Cierra la aplicación y pulsa Reintentar. Si sigues sin cerrarla no se tocarán sus datos, pero la instalación no puede continuar mientras el ejecutable esté en uso." IDRETRY loop
+    Abort
+  app_abierta_silencioso:
+    SetErrorLevel 1
+    Abort
+FunctionEnd
+
+Function un.ComprobarAppCerrada
+  un_loop:
+    nsExec::ExecToStack 'powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden -Command "if (Get-Process -Name ${APP_PROC} -ErrorAction SilentlyContinue) { exit 0 } else { exit 1 }"'
+    Pop $0
+    Pop $1
+    StrCmp $0 "0" un_app_abierta
+    StrCmp $0 "1" un_app_cerrada
+    IfSilent un_deteccion_fallida
+    MessageBox MB_ICONSTOP|MB_OK "No se pudo comprobar si ${APP_NAME} está abierto. Cierra la aplicación y vuelve a ejecutar el desinstalador."
+    Abort
+  un_deteccion_fallida:
+    SetErrorLevel 1
+    Abort
+  un_app_cerrada:
+    Return
+  un_app_abierta:
+    IfSilent un_app_abierta_silencioso
+    MessageBox MB_RETRYCANCEL|MB_ICONEXCLAMATION "${APP_NAME} está abierto. Cierra la aplicación y pulsa Reintentar. Si sigues sin cerrarla no se borrarán sus datos, pero la desinstalación no puede continuar mientras el ejecutable esté en uso." IDRETRY un_loop
+    Abort
+  un_app_abierta_silencioso:
+    SetErrorLevel 1
+    Abort
+FunctionEnd
+
+Function PrepararCopia
+  StrCpy $RollbackActivo "0"
+  StrCpy $InstalacionPrevia "0"
+  StrCpy $VersionPrevia ""
+  RMDir /r "$CarpetaCopia"
+  IfFileExists "$INSTDIR\${APP_EXE}" 0 copia_sin_app
+  StrCpy $InstalacionPrevia "1"
+  ReadRegStr $VersionPrevia HKCU "${CLAVE}" "DisplayVersion"
+
+  copia_sin_app:
+  CreateDirectory "$CarpetaCopia"
+  IfErrors copia_fallida
+  ClearErrors
+  ; Sólo se copian los tres ficheros que este instalador puede sobrescribir.
+  ; Así el rollback no toca ningún otro fichero de la carpeta elegida.
+  IfFileExists "$INSTDIR\${APP_EXE}" 0 copia_icono
+  CopyFiles /SILENT "$INSTDIR\${APP_EXE}" "$CarpetaCopia\${APP_EXE}"
+  IfErrors copia_fallida
+  copia_icono:
+  IfFileExists "$INSTDIR\icono.ico" 0 copia_desinstalador
+  CopyFiles /SILENT "$INSTDIR\icono.ico" "$CarpetaCopia\icono.ico"
+  IfErrors copia_fallida
+  copia_desinstalador:
+  IfFileExists "$INSTDIR\Desinstalar.exe" 0 copia_lista
+  CopyFiles /SILENT "$INSTDIR\Desinstalar.exe" "$CarpetaCopia\Desinstalar.exe"
+  IfErrors copia_fallida
+  copia_lista:
+  StrCpy $RollbackActivo "1"
+  DetailPrint "Copia de seguridad preparada en $CarpetaCopia"
+  Return
+
+  copia_fallida:
+  RMDir /r "$CarpetaCopia"
+  MessageBox MB_ICONSTOP|MB_OK "No se pudo crear la copia de seguridad de la instalación actual. No se ha modificado nada. Revisa el espacio libre y los permisos de $TEMP."
+  SetErrorLevel 1
+  Abort
+FunctionEnd
+
+Function RestaurarCopia
+  StrCmp $RollbackActivo "1" 0 restaurar_fin
+  StrCpy $RollbackActivo "0"
+  DetailPrint "Restaurando la instalación anterior..."
+  ; No se borra la carpeta entera: el usuario puede haber elegido una ruta
+  ; compartida. Sólo se deshacen los tres ficheros que instala esta aplicación.
+  Delete "$INSTDIR\${APP_EXE}"
+  Delete "$INSTDIR\icono.ico"
+  Delete "$INSTDIR\Desinstalar.exe"
+
+  ; Si alguno de esos nombres ya existía (por ejemplo, en una carpeta
+  ; compartida), se restauran los ficheros originales desde la copia.
+  IfFileExists "$CarpetaCopia\*.*" 0 restaurar_registro
+  CreateDirectory "$INSTDIR"
+  IfErrors restaurar_error
+  ClearErrors
+  IfFileExists "$CarpetaCopia\${APP_EXE}" 0 restaurar_icono
+  CopyFiles /SILENT "$CarpetaCopia\${APP_EXE}" "$INSTDIR\${APP_EXE}"
+  IfErrors restaurar_error
+  restaurar_icono:
+  IfFileExists "$CarpetaCopia\icono.ico" 0 restaurar_desinstalador
+  CopyFiles /SILENT "$CarpetaCopia\icono.ico" "$INSTDIR\icono.ico"
+  IfErrors restaurar_error
+  restaurar_desinstalador:
+  IfFileExists "$CarpetaCopia\Desinstalar.exe" 0 restaurar_registro
+  CopyFiles /SILENT "$CarpetaCopia\Desinstalar.exe" "$INSTDIR\Desinstalar.exe"
+  IfErrors restaurar_error
+
+  restaurar_registro:
+  StrCmp $InstalacionPrevia "1" 0 restaurar_nueva
+  StrCmp $VersionPrevia "" restaurar_limpiar
+  WriteRegStr HKCU "${CLAVE}" "DisplayVersion" "$VersionPrevia"
+  Goto restaurar_limpiar
+
+  restaurar_nueva:
+    ; La instalación era nueva: no debe quedar nada a medias, pero tampoco se
+    ; tocan los datos de %APPDATA%.
+    Delete "$SMPROGRAMS\${APP_NAME}\${APP_NAME}.lnk"
+    Delete "$SMPROGRAMS\${APP_NAME}\Desinstalar ${APP_NAME}.lnk"
+    RMDir "$SMPROGRAMS\${APP_NAME}"
+    Delete "$DESKTOP\${APP_NAME}.lnk"
+    DeleteRegKey HKCU "${CLAVE}"
+    DeleteRegKey HKCU "Software\${APP_KEY}"
+    RMDir "$INSTDIR"
+
+  restaurar_limpiar:
+    RMDir /r "$CarpetaCopia"
+    DetailPrint "Estado anterior restaurado."
+    Return
+
+  restaurar_error:
+    MessageBox MB_ICONSTOP|MB_OK "No se pudo restaurar la copia anterior. La copia sigue en $CarpetaCopia para que puedas recuperarla a mano."
+    Return
+
+  restaurar_fin:
+    Return
+FunctionEnd
+
+Function FalloInstalacion
+  Call RestaurarCopia
+  SetErrorLevel 1
+  Abort
+FunctionEnd
+
+Function .onInstFailed
+  Call RestaurarCopia
+FunctionEnd
+
 ; ---- Instalación -----------------------------------------------------------
 Section "Instalar ${APP_NAME}" SecPrincipal
   SetShellVarContext current
+  Call ComprobarAppCerrada
+  Call PrepararCopia
   SetOutPath "$INSTDIR"
   SetOverwrite on
   File "${ORIGEN}\${APP_EXE}"
+  IfErrors 0 +2
+    Call FalloInstalacion
 
-  ; El ejecutable de Rust no lleva icono incrustado, así que se instala el .ico
-  ; al lado y los accesos directos apuntan a él: sin esto saldría el genérico.
+  ; El ejecutable lleva el icono incrustado por build.rs. Se conserva el .ico
+  ; junto a la aplicación como respaldo para instalaciones antiguas y para el
+  ; desinstalador.
   File "${ARTE}\icono.ico"
+  IfErrors 0 +2
+    Call FalloInstalacion
 
   WriteUninstaller "$INSTDIR\Desinstalar.exe"
+  IfErrors 0 +2
+    Call FalloInstalacion
 
   ; Accesos directos
   CreateDirectory "$SMPROGRAMS\${APP_NAME}"
-  CreateShortcut "$SMPROGRAMS\${APP_NAME}\${APP_NAME}.lnk" "$INSTDIR\${APP_EXE}" "" "$INSTDIR\icono.ico" 0
+  CreateShortcut "$SMPROGRAMS\${APP_NAME}\${APP_NAME}.lnk" "$INSTDIR\${APP_EXE}" "" "$INSTDIR\${APP_EXE}" 0
   CreateShortcut "$SMPROGRAMS\${APP_NAME}\Desinstalar ${APP_NAME}.lnk" "$INSTDIR\Desinstalar.exe" "" "$INSTDIR\icono.ico" 0
-  CreateShortcut "$DESKTOP\${APP_NAME}.lnk" "$INSTDIR\${APP_EXE}" "" "$INSTDIR\icono.ico" 0
+  CreateShortcut "$DESKTOP\${APP_NAME}.lnk" "$INSTDIR\${APP_EXE}" "" "$INSTDIR\${APP_EXE}" 0
 
   ; Agregar o quitar programas (HKCU)
   WriteRegStr HKCU "${CLAVE}" "DisplayName"     "${APP_NAME}"
   WriteRegStr HKCU "${CLAVE}" "DisplayVersion"  "${APP_VERSION}"
-  WriteRegStr HKCU "${CLAVE}" "Publisher"       "${APP_NAME}"
+  WriteRegStr HKCU "${CLAVE}" "Publisher"       "${APP_AUTHOR}"
   WriteRegStr HKCU "${CLAVE}" "InstallLocation" "$INSTDIR"
-  WriteRegStr HKCU "${CLAVE}" "DisplayIcon"     "$INSTDIR\icono.ico"
+  WriteRegStr HKCU "${CLAVE}" "DisplayIcon"     "$INSTDIR\${APP_EXE},0"
   WriteRegStr HKCU "${CLAVE}" "UninstallString" '"$INSTDIR\Desinstalar.exe"'
   WriteRegStr HKCU "${CLAVE}" "QuietUninstallString" '"$INSTDIR\Desinstalar.exe" /S'
   WriteRegDWORD HKCU "${CLAVE}" "NoModify" 1
@@ -143,6 +331,10 @@ Section "Instalar ${APP_NAME}" SecPrincipal
   WriteRegDWORD HKCU "${CLAVE}" "EstimatedSize" $0
 
   WriteRegStr HKCU "Software\${APP_KEY}" "InstallDir" "$INSTDIR"
+
+  ; Instalación completa: ya no hay nada que deshacer.
+  StrCpy $RollbackActivo "0"
+  RMDir /r "$CarpetaCopia"
 SectionEnd
 
 ; ---- Página de datos del desinstalador -------------------------------------
@@ -181,6 +373,7 @@ FunctionEnd
 ; ---- Desinstalación --------------------------------------------------------
 Section "Uninstall"
   SetShellVarContext current
+  Call un.ComprobarAppCerrada
 
   Delete "$INSTDIR\${APP_EXE}"
   Delete "$INSTDIR\icono.ico"

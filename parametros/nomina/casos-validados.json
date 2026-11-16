@@ -1,0 +1,104 @@
+{
+  "descripcion": "Casos de contraste de los paquetes anuales. Las bases, los tipos del trabajador y los tipos de la empresa sin AT/EP salen de la orden de cotización y de las tablas oficiales. AT/EP se suma aparte como estimación de oficina al 1,50 %, porque la tarifa real depende de la actividad.",
+  "validado_el": "2026-11-16",
+  "casos": [
+    {
+      "id": "2024-grupo7-2000-indefinido",
+      "anyo": 2024,
+      "paquete_version": "2024.1",
+      "grupo": "Grupo7",
+      "tipo_contrato": "Indefinido",
+      "salario_bruto_anual_cents": 2400000,
+      "fecha_alta": "2024-01-01",
+      "mes": 1,
+      "base_esperada_cents": 200000,
+      "ss_trabajador_esperada_cents": 12940,
+      "ss_empresa_sin_at_ep_esperada_cents": 60960,
+      "at_ep_estimado_pb": 150,
+      "ss_empresa_total_esperada_cents": 63960,
+      "fuentes": [
+        "https://www.boe.es/eli/es/o/2024/01/29/pjc51/con"
+      ],
+      "nota": "Contrato indefinido, grupo 7, mes completo. Tipos 2024: trabajador 6,47 %; empresa sin AT/EP 30,48 %."
+    },
+    {
+      "id": "2025-grupo7-2000-indefinido",
+      "anyo": 2025,
+      "paquete_version": "2025.1",
+      "grupo": "Grupo7",
+      "tipo_contrato": "Indefinido",
+      "salario_bruto_anual_cents": 2400000,
+      "fecha_alta": "2025-01-01",
+      "mes": 1,
+      "base_esperada_cents": 200000,
+      "ss_trabajador_esperada_cents": 12960,
+      "ss_empresa_sin_at_ep_esperada_cents": 61140,
+      "at_ep_estimado_pb": 150,
+      "ss_empresa_total_esperada_cents": 64140,
+      "fuentes": [
+        "https://www.boe.es/diario_boe/txt.php?id=BOE-A-2025-3780"
+      ],
+      "nota": "Contrato indefinido, grupo 7, mes completo. Tipos 2025: trabajador 6,48 %; empresa sin AT/EP 30,57 %."
+    },
+    {
+      "id": "2026-grupo7-2000-indefinido",
+      "anyo": 2026,
+      "paquete_version": "2026.1",
+      "grupo": "Grupo7",
+      "tipo_contrato": "Indefinido",
+      "salario_bruto_anual_cents": 2400000,
+      "fecha_alta": "2026-01-01",
+      "mes": 1,
+      "base_esperada_cents": 200000,
+      "ss_trabajador_esperada_cents": 13000,
+      "ss_empresa_sin_at_ep_esperada_cents": 61300,
+      "at_ep_estimado_pb": 150,
+      "ss_empresa_total_esperada_cents": 64300,
+      "fuentes": [
+        "https://www.boe.es/eli/es/o/2026/03/30/pjc297/con",
+        "https://www.seg-social.es/wps/portal/wss/internet/Trabajadores/CotizacionRecaudacionTrabajadores/36537/mei",
+        "https://legia.es/guias/cotizacion-seguridad-social"
+      ],
+      "nota": "Contrato indefinido, grupo 7, mes completo. Tipos 2026: trabajador 6,50 % (130,00 EUR); empresa sin AT/EP 30,65 % (613,00 EUR); MEI 0,15 % y 0,75 %."
+    },
+    {
+      "id": "2026-grupo1-maximo",
+      "anyo": 2026,
+      "paquete_version": "2026.1",
+      "grupo": "Grupo1",
+      "tipo_contrato": "Indefinido",
+      "salario_bruto_anual_cents": 7200000,
+      "fecha_alta": "2026-01-01",
+      "mes": 1,
+      "base_esperada_cents": 510120,
+      "ss_trabajador_esperada_cents": 33158,
+      "ss_empresa_sin_at_ep_esperada_cents": 156352,
+      "at_ep_estimado_pb": 150,
+      "ss_empresa_total_esperada_cents": 164004,
+      "fuentes": [
+        "https://www.boe.es/eli/es/o/2026/03/30/pjc297/con",
+        "https://www.seg-social.es/wps/portal/wss/internet/Trabajadores/CotizacionRecaudacionTrabajadores/36537/mei"
+      ],
+      "nota": "Grupo 1 con bruto superior al tope: la base se limita a 5.101,20 EUR/mes."
+    },
+    {
+      "id": "2024-grupo1-maximo",
+      "anyo": 2024,
+      "paquete_version": "2024.1",
+      "grupo": "Grupo1",
+      "tipo_contrato": "Indefinido",
+      "salario_bruto_anual_cents": 7200000,
+      "fecha_alta": "2024-01-01",
+      "mes": 1,
+      "base_esperada_cents": 472050,
+      "ss_trabajador_esperada_cents": 30542,
+      "ss_empresa_sin_at_ep_esperada_cents": 143881,
+      "at_ep_estimado_pb": 150,
+      "ss_empresa_total_esperada_cents": 150962,
+      "fuentes": [
+        "https://www.boe.es/eli/es/o/2024/01/29/pjc51/con"
+      ],
+      "nota": "Grupo 1 con bruto superior al tope de 2024: la base se limita a 4.720,50 EUR/mes."
+    }
+  ]
+}

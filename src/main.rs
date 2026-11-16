@@ -14,6 +14,7 @@ mod fiscal;
 mod graficas;
 mod logo;
 mod modelos;
+mod nomina_paquetes;
 mod facturae;
 mod model;
 mod pdf;

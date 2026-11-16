@@ -6,3 +6,7 @@
 /datos.json.bak
 /datos.json.tmp
 /export
+
+# Certificados de firma Authenticode: fuera del repositorio.
+*.pfx
+*.p12

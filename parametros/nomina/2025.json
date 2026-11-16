@@ -1,0 +1,96 @@
+{
+  "anyo": 2025,
+  "version": "2025.1",
+  "vigente_desde": "2025-01-01",
+  "publicado": "2025-02-26",
+  "fuente": "Orden PJC/178/2025, de 25 de febrero (BOE)",
+  "url_fuente": "https://www.boe.es/diario_boe/txt.php?id=BOE-A-2025-3780",
+  "tope_maximo_mensual_cents": 490950,
+  "bases_por_grupo": [
+    {
+      "grupo": 1,
+      "diaria": false,
+      "minima_cents": 192900,
+      "maxima_cents": 490950
+    },
+    {
+      "grupo": 2,
+      "diaria": false,
+      "minima_cents": 159960,
+      "maxima_cents": 490950
+    },
+    {
+      "grupo": 3,
+      "diaria": false,
+      "minima_cents": 139170,
+      "maxima_cents": 490950
+    },
+    {
+      "grupo": 4,
+      "diaria": false,
+      "minima_cents": 138120,
+      "maxima_cents": 490950
+    },
+    {
+      "grupo": 5,
+      "diaria": false,
+      "minima_cents": 138120,
+      "maxima_cents": 490950
+    },
+    {
+      "grupo": 6,
+      "diaria": false,
+      "minima_cents": 138120,
+      "maxima_cents": 490950
+    },
+    {
+      "grupo": 7,
+      "diaria": false,
+      "minima_cents": 138120,
+      "maxima_cents": 490950
+    },
+    {
+      "grupo": 8,
+      "diaria": true,
+      "minima_cents": 4604,
+      "maxima_cents": 16365
+    },
+    {
+      "grupo": 9,
+      "diaria": true,
+      "minima_cents": 4604,
+      "maxima_cents": 16365
+    },
+    {
+      "grupo": 10,
+      "diaria": true,
+      "minima_cents": 4604,
+      "maxima_cents": 16365
+    },
+    {
+      "grupo": 11,
+      "diaria": true,
+      "minima_cents": 4604,
+      "maxima_cents": 16365
+    }
+  ],
+  "tipos": {
+    "contingencias_comunes_empleado_pb": 470,
+    "contingencias_comunes_empresa_pb": 2360,
+    "desempleo_indefinido_empleado_pb": 155,
+    "desempleo_indefinido_empresa_pb": 550,
+    "desempleo_temporal_empleado_pb": 160,
+    "desempleo_temporal_empresa_pb": 670,
+    "formacion_empleado_pb": 10,
+    "formacion_empresa_pb": 60,
+    "fogasa_empresa_pb": 20,
+    "mei_empleado_pb": 13,
+    "mei_empresa_pb": 67
+  },
+  "at_ep_empresa_pb": 150,
+  "at_ep_estimado": true,
+  "notas": [
+    "Incluye los tipos generales del Régimen General; no aplica bonificaciones, reducciones ni la cotización adicional de solidaridad.",
+    "AT/EP se incluye como estimación de oficina al 1,50 %; la tarifa oficial depende de la actividad."
+  ]
+}

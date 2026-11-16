@@ -689,7 +689,7 @@ pub fn retenciones_111(db: &Db, anyo: i32, tri: u32) -> Modelo {
         titulo: "Retenciones de nóminas · autoliquidación trimestral",
         periodo: etiqueta_periodo(anyo, tri),
         secciones: vec![seccion("Rendimientos del trabajo", casillas)],
-        nota: "Borrador calculado SÓLO con las nóminas generadas. La base del 111 es el bruto de cada nómina, no la base de cotización. No incluye facturas de profesionales (casillas 07-09), retribuciones en especie, regularizaciones, atrasos ni otras rentas. Revisa NIF, perceptores y retenciones antes de presentar.",
+        nota: "Borrador calculado SÓLO con las nóminas generadas. La base del 111 es el bruto de cada nómina, no la base de cotización. No incluye facturas de profesionales (casillas 07-09), retribuciones en especie ni otras rentas. Los recibos de diferencias se suman al periodo en que se registran. Revisa NIF, perceptores y retenciones antes de presentar.",
         detalle,
     }
 }
@@ -736,7 +736,7 @@ pub fn resumen_190(db: &Db, anyo: i32) -> Modelo {
         titulo: "Retenciones de nóminas · resumen anual",
         periodo: etiqueta_periodo(anyo, 0),
         secciones: vec![seccion("Resumen de la declaración", casillas)],
-        nota: "Borrador calculado SÓLO con las nóminas generadas. Usa percepciones íntegras (bruto) e IRPF, no la base de cotización. No incluye facturas de profesionales, rentas en especie, regularizaciones ni otras rentas. Cada perceptor debe tener un NIF válido y los totales deben cuadrar con los cuatro 111 del año.",
+        nota: "Borrador calculado SÓLO con las nóminas generadas. Usa percepciones íntegras (bruto) e IRPF, no la base de cotización. No incluye facturas de profesionales, retribuciones en especie ni otras rentas; los recibos de diferencias se suman al periodo en que se registran. Cada perceptor debe tener un NIF válido y los totales deben cuadrar con los cuatro 111 del año.",
         detalle,
     }
 }

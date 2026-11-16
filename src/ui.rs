@@ -14,6 +14,7 @@ use chrono::{Datelike, Local, NaiveDate};
 use eframe::egui;
 use egui::RichText;
 use std::path::PathBuf;
+use std::time::Instant;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Vista {
@@ -52,6 +53,25 @@ enum Accion {
     EmitirYGuardar,
     Cancelar,
     Bloqueada(String),
+}
+
+/// Acción destructiva que necesita una confirmación explícita.
+#[derive(Clone)]
+enum AccionConfirmada {
+    BorrarEmpleado(u64),
+    BorrarCliente(u64),
+    BorrarArticulo(u64),
+    BorrarNomina(u64),
+    CerrarEjercicio(i32),
+    QuitarAjustesModelo(String),
+}
+
+#[derive(Clone)]
+struct Confirmacion {
+    titulo: String,
+    mensaje: String,
+    etiqueta: &'static str,
+    accion: AccionConfirmada,
 }
 
 struct LineaBuf {
@@ -135,6 +155,109 @@ impl EmpleadoBuf {
     }
 }
 
+/// Importes de un recibo de diferencias. Se teclean como texto y pueden ser
+/// negativos: una corrección puede devolver dinero o regularizar una retención
+/// a la baja.
+#[derive(Clone)]
+struct DiferenciaBuf {
+    origen_id: u64,
+    anyo: i32,
+    mes: u32,
+    motivo: String,
+    bruto: String,
+    ss_empleado: String,
+    irpf: String,
+    ss_empresa: String,
+}
+
+/// Conceptos e incidencias de una nómina mientras se editan. Los importes van
+/// como texto para no perder comas ni ceros al teclear.
+#[derive(Clone)]
+struct ConceptosBuf {
+    nomina_id: u64,
+    pagas_extras: String,
+    horas_extra: String,
+    variables: String,
+    vacaciones_dias: String,
+    vacaciones: String,
+    bajas_dias: String,
+    bajas: String,
+    deducciones: String,
+    nota: String,
+}
+
+impl ConceptosBuf {
+    fn desde(n: &Nomina) -> Self {
+        Self {
+            nomina_id: n.id,
+            pagas_extras: fmt_cents(n.conceptos.pagas_extras_cents),
+            horas_extra: fmt_cents(n.conceptos.horas_extra_cents),
+            variables: fmt_cents(n.conceptos.variables_cents),
+            vacaciones_dias: n.conceptos.vacaciones_dias.to_string(),
+            vacaciones: fmt_cents(n.conceptos.vacaciones_cents),
+            bajas_dias: n.conceptos.bajas_dias.to_string(),
+            bajas: fmt_cents(n.conceptos.bajas_cents),
+            deducciones: fmt_cents(n.conceptos.deducciones_cents),
+            nota: n.conceptos.nota.clone(),
+        }
+    }
+
+    fn conceptos(&self) -> Option<ConceptosNomina> {
+        Some(ConceptosNomina {
+            pagas_extras_cents: parse_cents(&self.pagas_extras)?,
+            horas_extra_cents: parse_cents(&self.horas_extra)?,
+            variables_cents: parse_cents(&self.variables)?,
+            vacaciones_dias: parse_dias(&self.vacaciones_dias)?,
+            vacaciones_cents: parse_cents(&self.vacaciones)?,
+            bajas_dias: parse_dias(&self.bajas_dias)?,
+            bajas_cents: parse_cents(&self.bajas)?,
+            deducciones_cents: parse_cents(&self.deducciones)?,
+            nota: self.nota.trim().to_string(),
+        })
+    }
+}
+
+fn parse_dias(s: &str) -> Option<u32> {
+    let s = s.trim();
+    if s.is_empty() {
+        return Some(0);
+    }
+    let dias = s.parse::<u32>().ok()?;
+    (dias <= 31).then_some(dias)
+}
+
+impl DiferenciaBuf {
+    fn desde(origen: &Nomina, anyo: i32, mes: u32) -> Self {
+        Self {
+            origen_id: origen.id,
+            anyo,
+            mes,
+            motivo: String::new(),
+            bruto: String::new(),
+            ss_empleado: String::new(),
+            irpf: String::new(),
+            ss_empresa: String::new(),
+        }
+    }
+
+    fn importes(&self) -> Option<(i64, i64, i64, i64)> {
+        Some((
+            parse_cents(&self.bruto)?,
+            parse_cents(&self.ss_empleado)?,
+            parse_cents(&self.irpf)?,
+            parse_cents(&self.ss_empresa)?,
+        ))
+    }
+
+    fn valido(&self) -> bool {
+        let Some((bruto, ss_empleado, irpf, ss_empresa)) = self.importes() else {
+            return false;
+        };
+        !self.motivo.trim().is_empty()
+            && (bruto != 0 || ss_empleado != 0 || irpf != 0 || ss_empresa != 0)
+    }
+}
+
 impl GastoBuf {
     fn desde(gasto: Gasto) -> Self {
         Self {
@@ -206,6 +329,8 @@ struct Editor {
     nuevo: bool,
     /// Huella de cómo estaba al abrirlo: sirve para detectar cambios sin guardar.
     firma_inicial: String,
+    /// Última línea quitada, para poder deshacer el clic accidental.
+    deshacer_linea: Option<(usize, LineaBuf)>,
 }
 
 impl Editor {
@@ -220,6 +345,7 @@ impl Editor {
             doc,
             nuevo,
             firma_inicial: String::new(),
+            deshacer_linea: None,
         };
         e.firma_inicial = e.firma();
         e
@@ -381,16 +507,35 @@ fn plazo_texto(
 /// Abre la carpeta con el fichero ya seleccionado.
 #[cfg(windows)]
 fn mostrar_en_carpeta(ruta: &std::path::Path) {
+    use std::os::windows::process::CommandExt;
+
+    // Explorer no usa el mismo parser que un programa normal: espera
+    // `/select,"ruta con espacios"`, no el argumento entero entrecomillado.
+    // `raw_arg` evita que Rust añada comillas alrededor de `/select,`.
+    let mut argumento = std::ffi::OsString::from("/select,\"");
+    argumento.push(ruta.as_os_str());
+    argumento.push("\"");
     let _ = std::process::Command::new("explorer")
-        .arg(format!("/select,{}", ruta.display()))
+        .raw_arg(argumento)
         .spawn();
 }
 
 #[cfg(not(windows))]
 fn mostrar_en_carpeta(ruta: &std::path::Path) {
     if let Some(dir) = ruta.parent() {
-        let _ = std::process::Command::new("xdg-open").arg(dir).spawn();
+        abrir_carpeta(dir);
     }
+}
+
+/// Abre una carpeta de exportación en el explorador del sistema.
+#[cfg(windows)]
+fn abrir_carpeta(dir: &std::path::Path) {
+    let _ = std::process::Command::new("explorer").arg(dir).spawn();
+}
+
+#[cfg(not(windows))]
+fn abrir_carpeta(dir: &std::path::Path) {
+    let _ = std::process::Command::new("xdg-open").arg(dir).spawn();
 }
 
 /// Enseña el PDF recién generado: abre el documento y su carpeta.
@@ -783,6 +928,12 @@ pub struct App {
     pestana_empleados: u8,
     nomina_anyo: i32,
     nomina_mes: u32,
+    /// Nómina abierta en la ventana «Nómina explicada».
+    nomina_explicada: Option<u64>,
+    /// Recibo de diferencias pendiente de crear.
+    diferencia: Option<DiferenciaBuf>,
+    /// Conceptos e incidencias de una nómina en edición.
+    conceptos: Option<ConceptosBuf>,
     /// Año y trimestre que se miran en Contabilidad (0 = todo el año).
     anyo: i32,
     trimestre: u32,
@@ -795,12 +946,17 @@ pub struct App {
     pestana_contab: u8,
     /// Copia de seguridad pendiente de confirmar.
     restaurar: Option<PathBuf>,
+    /// Borrado u otra acción destructiva pendiente de confirmar.
+    confirmar: Option<Confirmacion>,
+    /// El usuario intentó cerrar la ventana con un documento sin guardar.
+    cerrar_pendiente: bool,
+    /// Momento en que se mostró el aviso inferior.
+    toast_desde: Option<Instant>,
     anular: Option<(u64, String)>,
     rectificar: Option<RectificarBuf>,
-    ver_xml: Option<(String, String)>,
+    ver_xml: Option<(String, String, PathBuf)>,
     /// Ventana «Cómo funciona Verifactu» abierta.
     ayuda_verifactu: bool,
-    confirmar: Option<String>,
     /// Si hay cambios sin guardar: a dónde se quería ir al aceptar el aviso.
     descartar: Option<Vista>,
     /// Sólo con `AUTONOMOFACIL_PERF=1`: mide y se cierra solo.
@@ -830,6 +986,7 @@ impl App {
         if let Some(a) = &aviso {
             toast = Some((a.clone(), true));
         }
+        let toast_desde = toast.as_ref().map(|_| Instant::now());
         Self {
             db,
             vista,
@@ -848,6 +1005,9 @@ impl App {
             pestana_empleados: 0,
             nomina_anyo: Local::now().year(),
             nomina_mes: Local::now().month(),
+            nomina_explicada: None,
+            diferencia: None,
+            conceptos: None,
             anyo: Local::now().year(),
             trimestre: 0,
             zoom_aplicado: false,
@@ -855,11 +1015,13 @@ impl App {
             cobro: None,
             pestana_contab: 0,
             restaurar: None,
+            confirmar: None,
+            cerrar_pendiente: false,
+            toast_desde,
             anular: None,
             rectificar: None,
             ver_xml: None,
             ayuda_verifactu: false,
-            confirmar: None,
             descartar: None,
             bench,
         }
@@ -867,6 +1029,7 @@ impl App {
 
     fn avisar(&mut self, msg: impl Into<String>, error: bool) {
         self.toast = Some((msg.into(), error));
+        self.toast_desde = Some(Instant::now());
     }
 
     fn guardar(&mut self) {
@@ -1134,7 +1297,7 @@ impl App {
         std::fs::create_dir_all(&dir).map_err(|e| format!("crear {}: {e}", dir.display()))?;
         let ruta = dir.join(&nombre);
         std::fs::write(&ruta, xml.clone()).map_err(|e| format!("escribir XML: {e}"))?;
-        self.ver_xml = Some((nombre, xml));
+        self.ver_xml = Some((nombre, xml, ruta.clone()));
         Ok(ruta)
     }
 }
@@ -1158,6 +1321,20 @@ fn campo_h(ui: &mut egui::Ui, etiqueta: &str, valor: &mut String, ayuda: &str) {
         [ancho, 30.0],
         egui::TextEdit::singleline(valor).margin(egui::Margin::symmetric(10.0, 7.0)),
     );
+    // La etiqueta está fuera del campo para que la rejilla quede alineada; se
+    // la damos también a AccessKit para que el lector de pantalla la anuncie.
+    let etiqueta_accesible = etiqueta.to_string();
+    let valor_accesible = valor.clone();
+    let habilitado = ui.is_enabled();
+    resp.widget_info(move || {
+        let mut info = egui::WidgetInfo::text_edit(
+            habilitado,
+            &valor_accesible,
+            &valor_accesible,
+        );
+        info.label = Some(etiqueta_accesible.clone());
+        info
+    });
     if !ayuda.is_empty() {
         resp = resp.on_hover_ui(|ui| tema::ayuda_emergente(ui, etiqueta, ayuda));
     }
@@ -1204,6 +1381,19 @@ impl eframe::App for App {
         }
 
         self.sincronizar_zoom(ctx);
+
+        // Cerrar la ventana con un documento a medias no debe perder cambios
+        // en silencio: se cancela el cierre y se ofrece guardar o descartar.
+        if ctx.input(|i| i.viewport().close_requested())
+            && self
+                .editor
+                .as_ref()
+                .map(|e| e.modificado())
+                .unwrap_or(false)
+        {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            self.cerrar_pendiente = true;
+        }
 
         // La barra lateral se adapta al ancho de la ventana y se puede
         // arrastrar: en pantallas pequeñas ocupa menos y deja sitio al
@@ -1338,6 +1528,23 @@ impl eframe::App for App {
             self.guardar();
         }
 
+        // Un aviso no debe quedarse para siempre ocupando la parte inferior.
+        // Los errores duran algo más para que dé tiempo a leerlos.
+        if let Some(desde) = self.toast_desde {
+            let segundos = if self.toast.as_ref().map(|(_, e)| *e).unwrap_or(false) {
+                9.0
+            } else {
+                5.0
+            };
+            if desde.elapsed().as_secs_f32() > segundos {
+                self.toast = None;
+                self.toast_desde = None;
+            } else {
+                // Sin eventos no habría nuevos fotogramas: pedimos uno para
+                // que el aviso pueda caducar aunque el usuario no toque nada.
+                ctx.request_repaint_after(std::time::Duration::from_millis(250));
+            }
+        }
         if let Some((msg, error)) = self.toast.clone() {
             let (fondo, color) = if error {
                 (tema::ROJO_CLARO, tema::ROJO)
@@ -1354,8 +1561,9 @@ impl eframe::App for App {
                     ui.horizontal(|ui| {
                         ui.label(RichText::new(&msg).size(12.5).strong().color(color));
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui.small_button("cerrar").clicked() {
+                            if ui.small_button("Cerrar").clicked() {
                                 self.toast = None;
+                                self.toast_desde = None;
                             }
                         });
                     });
@@ -1465,8 +1673,23 @@ impl eframe::App for App {
         if self.descartar.is_some() {
             self.ventana_descartar(ctx);
         }
+        if self.confirmar.is_some() {
+            self.ventana_confirmar(ctx);
+        }
+        if self.cerrar_pendiente {
+            self.ventana_cerrar(ctx);
+        }
         if self.ayuda_verifactu {
             self.ventana_ayuda_verifactu(ctx);
+        }
+        if self.nomina_explicada.is_some() {
+            self.ventana_nomina_explicada(ctx);
+        }
+        if self.diferencia.is_some() {
+            self.ventana_diferencia(ctx);
+        }
+        if self.conceptos.is_some() {
+            self.ventana_conceptos(ctx);
         }
     }
 }
@@ -1883,8 +2106,10 @@ impl App {
         let mut descartar = false;
         let mut guardar = false;
         egui::Window::new("Cambios sin guardar")
+            .id(egui::Id::new("descartar_cambios"))
             .collapsible(false)
             .resizable(false)
+            .order(egui::Order::Foreground)
             .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
             .default_width(460.0)
             .show(ctx, |ui| {
@@ -1914,6 +2139,9 @@ impl App {
                     }
                 });
             });
+        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            seguir = true;
+        }
         if guardar {
             if self.guardar_borrador_actual() {
                 self.descartar = None;
@@ -1929,6 +2157,215 @@ impl App {
         }
         if seguir {
             self.descartar = None;
+        }
+    }
+
+    /// Confirmación común para borrados y cambios que no se deshacen.
+    fn ventana_confirmar(&mut self, ctx: &egui::Context) {
+        let Some(conf) = self.confirmar.clone() else {
+            return;
+        };
+        let mut cancelar = false;
+        let mut aceptar = false;
+        egui::Window::new("Confirmar acción")
+            .id(egui::Id::new("confirmar_accion"))
+            .collapsible(false)
+            .resizable(false)
+            .order(egui::Order::Foreground)
+            .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+            .default_width(480.0)
+            .show(ctx, |ui| {
+                ui.set_min_width(430.0);
+                ui.label(
+                    RichText::new(&conf.titulo)
+                        .size(17.0)
+                        .strong()
+                        .color(tema::TEXTO),
+                );
+                ui.add_space(4.0);
+                ui.label(RichText::new(&conf.mensaje).size(12.0).color(tema::SUAVE));
+                ui.add_space(10.0);
+                ui.horizontal(|ui| {
+                    if ui.button("Cancelar").clicked() {
+                        cancelar = true;
+                    }
+                    if tema::boton_peligro(ui, conf.etiqueta).clicked() {
+                        aceptar = true;
+                    }
+                });
+            });
+        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            cancelar = true;
+        }
+        if aceptar {
+            self.confirmar = None;
+            self.ejecutar_confirmacion(conf.accion);
+        } else if cancelar {
+            self.confirmar = None;
+        }
+    }
+
+    /// Cierre de la ventana con un documento sin guardar.
+    fn ventana_cerrar(&mut self, ctx: &egui::Context) {
+        if !self
+            .editor
+            .as_ref()
+            .map(|e| e.modificado())
+            .unwrap_or(false)
+        {
+            self.cerrar_pendiente = false;
+            return;
+        }
+        let mut guardar = false;
+        let mut descartar = false;
+        let mut seguir = false;
+        egui::Window::new("Cambios sin guardar")
+            .id(egui::Id::new("cerrar_con_cambios"))
+            .collapsible(false)
+            .resizable(false)
+            .order(egui::Order::Foreground)
+            .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+            .default_width(460.0)
+            .show(ctx, |ui| {
+                ui.set_min_width(420.0);
+                ui.label(
+                    RichText::new("El documento tiene cambios sin guardar.")
+                        .strong()
+                        .color(tema::TEXTO),
+                );
+                ui.label(
+                    RichText::new(
+                        "Si cierras ahora se pierden. Guarda el borrador para terminar la factura más tarde.",
+                    )
+                    .size(11.5)
+                    .color(tema::SUAVE),
+                );
+                ui.add_space(10.0);
+                ui.horizontal(|ui| {
+                    if tema::boton_primario(ui, "Guardar borrador y cerrar").clicked() {
+                        guardar = true;
+                    }
+                    if ui.button("Descartar y cerrar").clicked() {
+                        descartar = true;
+                    }
+                    if ui.button("Seguir editando").clicked() {
+                        seguir = true;
+                    }
+                });
+            });
+        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            seguir = true;
+        }
+        if guardar && self.guardar_borrador_actual() {
+            self.cerrar_pendiente = false;
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        }
+        if descartar {
+            self.editor = None;
+            self.seleccion = None;
+            self.cerrar_pendiente = false;
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        }
+        if seguir {
+            self.cerrar_pendiente = false;
+        }
+    }
+
+    fn ejecutar_confirmacion(&mut self, accion: AccionConfirmada) {
+        match accion {
+            AccionConfirmada::BorrarEmpleado(id) => {
+                if self.db.nominas.iter().any(|n| n.empleado_id == id) {
+                    self.avisar(
+                        "No se puede borrar: tiene nóminas generadas. Borra antes sus nóminas.",
+                        true,
+                    );
+                    return;
+                }
+                let nombre = self
+                    .db
+                    .empleados
+                    .iter()
+                    .find(|e| e.id == id)
+                    .map(|e| e.etiqueta())
+                    .unwrap_or_else(|| "el empleado".to_string());
+                self.db.empleados.retain(|e| e.id != id);
+                if self
+                    .ficha_empleado
+                    .as_ref()
+                    .map(|f| f.empleado.id == id)
+                    .unwrap_or(false)
+                {
+                    self.ficha_empleado = None;
+                }
+                self.guardar();
+                self.avisar(format!("Empleado borrado: {nombre}."), false);
+            }
+            AccionConfirmada::BorrarCliente(id) => {
+                if self.db.documentos.iter().any(|d| d.cliente_id == id) {
+                    self.avisar("No se puede borrar: tiene documentos asociados.", true);
+                    return;
+                }
+                let nombre = self
+                    .db
+                    .clientes
+                    .iter()
+                    .find(|c| c.id == id)
+                    .map(|c| c.etiqueta())
+                    .unwrap_or_else(|| "el cliente".to_string());
+                self.db.clientes.retain(|c| c.id != id);
+                if self
+                    .ficha_cliente
+                    .as_ref()
+                    .map(|f| f.id == id)
+                    .unwrap_or(false)
+                {
+                    self.ficha_cliente = None;
+                }
+                self.guardar();
+                self.avisar(format!("Cliente borrado: {nombre}."), false);
+            }
+            AccionConfirmada::BorrarArticulo(id) => {
+                let nombre = self
+                    .db
+                    .articulos
+                    .iter()
+                    .find(|a| a.id == id)
+                    .map(|a| a.descripcion.clone())
+                    .unwrap_or_else(|| "el artículo".to_string());
+                self.db.articulos.retain(|a| a.id != id);
+                if self
+                    .ficha_articulo
+                    .as_ref()
+                    .map(|f| f.art.id == id)
+                    .unwrap_or(false)
+                {
+                    self.ficha_articulo = None;
+                }
+                self.guardar();
+                self.avisar(format!("Artículo borrado: {nombre}."), false);
+            }
+            AccionConfirmada::BorrarNomina(id) => match self.borrar_nomina(id) {
+                Ok(()) => self.avisar("Nómina borrada.", false),
+                Err(e) => self.avisar(e, true),
+            },
+            AccionConfirmada::CerrarEjercicio(anyo) => {
+                if !self.db.esta_cerrado(anyo) {
+                    self.db.cerrados.push(anyo);
+                    self.db.cerrados.sort_unstable();
+                    self.guardar();
+                    self.avisar(
+                        format!(
+                            "Ejercicio {anyo} cerrado: no se emitirán documentos con esa fecha."
+                        ),
+                        false,
+                    );
+                }
+            }
+            AccionConfirmada::QuitarAjustesModelo(clave) => {
+                self.db.ajustes_modelos.remove(&clave);
+                self.guardar();
+                self.avisar("Ajustes manuales del modelo eliminados.", false);
+            }
         }
     }
 
@@ -2705,6 +3142,7 @@ impl App {
         let mut accion = Accion::Nada;
         let mut quitar: Option<usize> = None;
         let mut anadir = false;
+        let mut deshacer_linea = false;
         let mut desde_articulo: Option<usize> = None;
 
         ui.label(
@@ -2726,6 +3164,17 @@ impl App {
             .size(12.0)
             .color(tema::SUAVE),
         );
+        if editor.modificado() {
+            ui.add_space(5.0);
+            ui.horizontal(|ui| {
+                tema::insignia(ui, "Cambios sin guardar", tema::AMBAR_CLARO, tema::AMBAR);
+                ui.label(
+                    RichText::new("Ctrl+S guarda el borrador; también se avisa al cambiar de pantalla o cerrar.")
+                        .size(10.5)
+                        .color(tema::SUAVE),
+                );
+            });
+        }
         ui.add_space(12.0);
 
         let operacion_antes = editor.doc.operacion;
@@ -2988,6 +3437,14 @@ impl App {
             if ui.button("+ Añadir línea").clicked() {
                 anadir = true;
             }
+            if editor.deshacer_linea.is_some()
+                && ui
+                    .small_button("Deshacer quitar línea")
+                    .on_hover_text("Vuelve a poner la última línea que quitaste.")
+                    .clicked()
+            {
+                deshacer_linea = true;
+            }
             if !articulos.is_empty() {
                 egui::ComboBox::from_id_salt("combo_articulo")
                     .selected_text("Insertar artículo…")
@@ -3005,7 +3462,15 @@ impl App {
         });
 
         if let Some(i) = quitar {
-            editor.lineas.remove(i);
+            if i < editor.lineas.len() {
+                let linea = editor.lineas.remove(i);
+                editor.deshacer_linea = Some((i, linea));
+            }
+        }
+        if deshacer_linea {
+            if let Some((i, linea)) = editor.deshacer_linea.take() {
+                editor.lineas.insert(i.min(editor.lineas.len()), linea);
+            }
         }
         if anadir {
             editor.lineas.push(LineaBuf::desde(&Linea {
@@ -3733,8 +4198,15 @@ impl App {
                                     .button("Quitar los ajustes de este modelo")
                                     .clicked()
                                 {
-                                    self.db.ajustes_modelos.remove(&clave_ajustes);
-                                    self.guardar();
+                                    self.confirmar = Some(Confirmacion {
+                                        titulo: "Quitar ajustes manuales".into(),
+                                        mensaje: "Se borrarán los valores escritos a mano en este modelo y volverán los cálculos automáticos. Esta acción no se puede deshacer."
+                                            .into(),
+                                        etiqueta: "Quitar ajustes",
+                                        accion: AccionConfirmada::QuitarAjustesModelo(
+                                            clave_ajustes.clone(),
+                                        ),
+                                    });
                                 }
                             });
                         }
@@ -3779,7 +4251,7 @@ impl App {
             if ui.button("Abrir la carpeta de exportación").clicked() {
                 let dir = export::raiz_empresa(&self.db.empresa);
                 let _ = std::fs::create_dir_all(&dir);
-                let _ = std::process::Command::new("explorer").arg(&dir).spawn();
+                abrir_carpeta(&dir);
             }
             if ui.button("Ir a la Guía rápida").clicked() {
                 self.vista = Vista::Guia;
@@ -3787,9 +4259,10 @@ impl App {
         });
         ui.add_space(4.0);
         ui.label(
-            RichText::new(
-                "Los ficheros se guardan en %APPDATA%\\AutonomoFACIL\\export\\<empresa>\\Modelos, con el modelo, el año, el trimestre y la empresa en el nombre.",
-            )
+            RichText::new(format!(
+                "Los ficheros se guardan en {}, con el modelo, el año, el trimestre y la empresa en el nombre.",
+                export::dir_modelos(&self.db.empresa).display()
+            ))
             .size(10.5)
             .color(tema::TENUE),
         );
@@ -4240,7 +4713,7 @@ impl App {
                 if ui.button("Abrir la carpeta de exportación").clicked() {
                     let dir = export::raiz_empresa(&self.db.empresa);
                     let _ = std::fs::create_dir_all(&dir);
-                    let _ = std::process::Command::new("explorer").arg(&dir).spawn();
+                    abrir_carpeta(&dir);
                 }
             });
         });
@@ -4593,7 +5066,7 @@ impl App {
                             });
                         ui.label(
                             RichText::new(
-                                "Estimación orientativa: 12 pagas y tipos generales de 2026. La Seguridad Social se calcula sobre la base de cotización (con los mínimos y máximos del grupo) y el IRPF sobre el bruto. No sustituye el recibo oficial ni el boletín de cotización.",
+                                "Estimación orientativa: 12 pagas y el paquete anual de parámetros del ejercicio. La Seguridad Social se calcula sobre la base de cotización (con los mínimos y máximos del grupo) y el IRPF sobre el bruto. No sustituye el recibo oficial ni el boletín de cotización.",
                             )
                             .size(10.5)
                             .color(tema::TENUE),
@@ -4670,10 +5143,21 @@ impl App {
                         true,
                     );
                 } else {
-                    self.db.empleados.retain(|e| e.id != id);
-                    self.guardar();
-                    self.avisar("Empleado borrado.", false);
-                    self.ficha_empleado = None;
+                    let nombre = self
+                        .db
+                        .empleados
+                        .iter()
+                        .find(|e| e.id == id)
+                        .map(|e| e.etiqueta())
+                        .unwrap_or_else(|| "este empleado".to_string());
+                    self.confirmar = Some(Confirmacion {
+                        titulo: "Borrar empleado".into(),
+                        mensaje: format!(
+                            "Se borrará la ficha de {nombre}. Esta acción no se puede deshacer."
+                        ),
+                        etiqueta: "Borrar empleado",
+                        accion: AccionConfirmada::BorrarEmpleado(id),
+                    });
                 }
             }
         });
@@ -4701,9 +5185,14 @@ impl App {
                         ui.selectable_value(&mut self.nomina_mes, i as u32 + 1, *nombre);
                     }
                 });
+            let hay_paquete = crate::nomina_paquetes::paquete_nomina(self.nomina_anyo).is_some();
             if ui
-                .button("Generar nóminas del mes")
-                .on_hover_text("Crea una nómina por cada empleado con alta en el mes seleccionado. Si ya existe una nómina de ese empleado para ese mes, no la duplica.")
+                .add_enabled(hay_paquete, egui::Button::new("Generar nóminas del mes"))
+                .on_hover_text(if hay_paquete {
+                    "Crea una nómina por cada empleado con alta en el mes seleccionado. Si ya existe una nómina de ese empleado para ese mes, no la duplica."
+                } else {
+                    "No hay paquete anual de parámetros para ese ejercicio. No se generan nóminas con datos estimados."
+                })
                 .clicked()
             {
                 match self.generar_nominas_mes() {
@@ -4718,10 +5207,47 @@ impl App {
                 }
             }
         });
+        match crate::nomina_paquetes::paquete_nomina(self.nomina_anyo) {
+            Some(p) => {
+                ui.label(
+                    RichText::new(format!(
+                        "Paquete anual {} · vigente desde {} · {}",
+                        p.version, p.vigente_desde, p.fuente
+                    ))
+                    .size(10.5)
+                    .color(tema::TENUE),
+                );
+                if p.at_ep_estimado {
+                    ui.label(
+                        RichText::new(format!(
+                            "La prima de AT/EP ({}) es una estimación de oficina; la tarifa real depende de la actividad.",
+                            fmt_pb(p.at_ep_empresa_pb)
+                        ))
+                        .size(10.5)
+                        .color(tema::AMBAR),
+                    );
+                }
+            }
+            None => {
+                let disponibles = crate::nomina_paquetes::anyos_disponibles()
+                    .iter()
+                    .map(|a| a.to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                ui.label(
+                    RichText::new(format!(
+                        "Sin paquete anual de parámetros para {}. No se pueden generar nóminas de ese ejercicio. Paquetes disponibles: {}.",
+                        self.nomina_anyo, disponibles
+                    ))
+                    .size(10.5)
+                    .color(tema::AMBAR),
+                );
+            }
+        }
         ui.add_space(8.0);
         ui.label(
             RichText::new(
-                "Borrador mensual con 12 pagas y tipos generales de 2026. El salario se prorratea por días naturales: cuentan el alta y la baja, y el divisor son los días reales del mes (28, 29, 30 o 31). La base de cotización se limita por grupo y ejercicio. Revisa cada caso con tu asesor y usa el recibo oficial para presentar.",
+                "Borrador mensual con 12 pagas y el paquete anual del ejercicio. El salario se prorratea por días naturales: cuentan el alta y la baja, y el divisor son los días reales del mes (28, 29, 30 o 31). La base de cotización se limita por grupo y ejercicio. Cada nómina empieza en Borrador y avanza a Revisada, Aprobada, Pagada y Cerrada; al cerrarla queda bloqueada y sólo se corrige con un recibo de diferencias.",
             )
             .size(11.0)
             .color(tema::SUAVE),
@@ -4741,7 +5267,7 @@ impl App {
                 );
                 ui.label(
                     RichText::new(
-                        "El bruto se limita entre las bases mínima y máxima del grupo y ejercicio (tablas 2024-2026). La base resultante se guarda en la nómina y es la que se usa para la Seguridad Social; el IRPF se calcula sobre el bruto. Grupos 1-7: bases mensuales que, en un mes incompleto, se prorratean con 30 días. Grupos 8-11: bases diarias en meses incompletos y equivalencia de 30 días con tope mensual en meses completos. No aplica bonificaciones, regularizaciones ni el boletín de cotización; no sustituye el recibo oficial.",
+                        "El bruto se limita entre las bases mínima y máxima del grupo y ejercicio (paquetes anuales 2024-2026). La base resultante se guarda en la nómina y es la que se usa para la Seguridad Social; el IRPF se calcula sobre el bruto. Grupos 1-7: bases mensuales que, en un mes incompleto, se prorratean con 30 días. Grupos 8-11: bases diarias en meses incompletos y equivalencia de 30 días con tope mensual en meses completos. No aplica bonificaciones ni regularizaciones automáticas: las correcciones van en un recibo de diferencias. No sustituye el recibo oficial.",
                     )
                     .size(11.0)
                     .color(tema::AMBAR),
@@ -4780,11 +5306,11 @@ impl App {
                     ),
                     (
                         "6. Cerrar y revisar",
-                        "Marca «Pagada» cuando corresponda. El PDF es un resumen borrador, no el recibo oficial ni el boletín de cotización. Si el pago bancario ya está contabilizado como gasto, exclúyelo para no duplicar el coste de personal.",
+                        "Revisa, aprueba, marca pagada y cierra. Al cerrar, la nómina y su expediente quedan bloqueados: no se puede borrar ni modificar. Para una corrección posterior, abre «Nómina explicada» y crea un recibo de diferencias. El PDF es un resumen, no el recibo oficial ni el boletín de cotización. Si el pago bancario ya está contabilizado como gasto, exclúyelo para no duplicar el coste de personal.",
                     ),
                     (
                         "7. 111 y 190",
-                        "El 111 del trimestre y el 190 del año se calculan sólo con las nóminas generadas. Usan las percepciones íntegras (bruto) y el IRPF, no la base de cotización. No incluyen facturas de profesionales, rentas en especie, atrasos ni regularizaciones. Revisa los NIF y presenta en la AEAT.",
+                        "El 111 del trimestre y el 190 del año se calculan sólo con las nóminas generadas. Usan las percepciones íntegras (bruto) y el IRPF, no la base de cotización. No incluyen facturas de profesionales ni rentas en especie; los recibos de diferencias se suman al periodo en que se registran. Revisa los NIF y presenta en la AEAT.",
                     ),
                 ] {
                     ui.label(RichText::new(titulo).strong().color(tema::TEXTO));
@@ -4843,7 +5369,7 @@ impl App {
             );
             ui.label(
                 RichText::new(
-                    "Se calculan sólo con las nóminas generadas: usan el bruto y el IRPF, no la base de cotización. No incluyen facturas de profesionales, rentas en especie, regularizaciones ni otros pagos. Revisa los NIF antes de presentar.",
+                    "Se calculan sólo con las nóminas generadas: usan el bruto y el IRPF, no la base de cotización. No incluyen facturas de profesionales, rentas en especie ni otros pagos; los recibos de diferencias se suman al periodo en que se registran. Revisa los NIF antes de presentar.",
                 )
                 .size(10.5)
                 .color(tema::TENUE),
@@ -4885,7 +5411,7 @@ impl App {
             tema::vacio(
                 ui,
                 "Sin nóminas este mes",
-                "Guarda empleados con alta en el mes y pulsa «Generar nóminas del mes». Un alta posterior al mes no genera nómina.",
+                "Guarda empleados con alta en el mes y pulsa «Generar nóminas del mes». Un alta posterior al mes no genera nómina. Después, en cada borrador, «Conceptos» permite añadir extras, variables, vacaciones, bajas y deducciones.",
             );
         } else {
             let bruto: i64 = filas.iter().map(|n| n.bruto_cents).sum();
@@ -4910,7 +5436,12 @@ impl App {
 
             let mut borrar: Option<u64> = None;
             let mut pdf_id: Option<u64> = None;
-            let mut pagada: Option<(u64, bool)> = None;
+            let mut explicada: Option<u64> = None;
+            let mut avanzar: Option<u64> = None;
+            let mut abrir_diferencia: Option<DiferenciaBuf> = None;
+            let mut abrir_conceptos: Option<ConceptosBuf> = None;
+            let anyo_sel = self.nomina_anyo;
+            let mes_sel = self.nomina_mes;
             // La tabla puede tener muchas nóminas: se limita al alto que queda
             // libre y se desplaza en vertical. Las acciones (PDF y Borrar)
             // siguen dentro de cada fila, así que se mueven con ella y no se
@@ -4929,20 +5460,34 @@ impl App {
                             for (cabecera, ayuda) in [
                                 ("Empleado", "Nombre y datos laborales copiados en la nómina."),
                                 ("Días", "Días naturales trabajados / días reales del mes. Alta y baja cuentan."),
-                                ("Bruto", "Salario del periodo, prorrateado por días naturales. El IRPF se calcula sobre esta cifra."),
+                                ("Bruto", "Salario del periodo, prorrateado por días naturales, más los conceptos e incidencias. El IRPF se calcula sobre esta cifra."),
                                 ("SS empleado", "Seguridad Social a cargo del trabajador, calculada sobre la base de cotización."),
                                 ("IRPF", "Retención aplicada al bruto con el porcentaje de la ficha."),
                                 ("Neto", "Bruto menos Seguridad Social del trabajador e IRPF."),
                                 ("Coste empresa", "Bruto más Seguridad Social a cargo de la empresa; pasa a Contabilidad y al 130."),
-                                ("Pagada", "Estado de pago. Marcarlo no crea ningún apunte contable."),
-                                ("Acciones", "PDF genera un resumen borrador; Borrar elimina sólo esta nómina."),
+                                ("Estado", "Borrador → Revisada → Aprobada → Pagada → Cerrada. Al cerrar queda bloqueada."),
+                                ("Acciones", "PDF, Nómina explicada, conceptos del mes y avance de estado. Conceptos y Borrar sólo están disponibles en borrador."),
                             ] {
                                 ui.label(RichText::new(cabecera).size(10.5).strong().color(tema::TENUE))
                                     .on_hover_text(ayuda);
                             }
                             ui.end_row();
                             for n in &filas {
-                                ui.label(&n.empleado_nombre);
+                                ui.vertical(|ui| {
+                                    ui.label(&n.empleado_nombre);
+                                    if n.tipo == TipoNomina::Diferencia {
+                                        ui.label(
+                                            RichText::new(format!(
+                                                "Diferencia de la nómina #{}",
+                                                n.nomina_origen
+                                                    .map(|id| id.to_string())
+                                                    .unwrap_or_else(|| "—".to_string())
+                                            ))
+                                            .size(10.0)
+                                            .color(tema::AMBAR),
+                                        );
+                                    }
+                                });
                                 let dias = if n.dias_mes == 0 {
                                     "—".to_string()
                                 } else {
@@ -4951,28 +5496,112 @@ impl App {
                                 ui.label(dias).on_hover_text(
                                     "Días naturales trabajados / días reales del mes. Se cuentan el alta y la baja.",
                                 );
-                                ui.label(fmt_cents_eur(n.bruto_cents)).on_hover_text(format!(
-                                    "Bruto del periodo: {}\nBase de cotización aplicada: {}\nLa Seguridad Social se calcula sobre la base; el IRPF, sobre el bruto.",
-                                    fmt_cents_eur(n.bruto_cents),
-                                    fmt_cents_eur(n.base_cotizacion_cents)
-                                ));
+                                ui.label(fmt_cents_eur(n.bruto_cents)).on_hover_text(
+                                    if n.tipo.diferencia() {
+                                        format!(
+                                            "Diferencia de bruto: {}\nLa Seguridad Social y el IRPF se indican en la corrección; no hay una base calculada.",
+                                            fmt_cents_eur(n.bruto_cents)
+                                        )
+                                    } else {
+                                        let conceptos = if n.conceptos.vacia() {
+                                            "Sin conceptos adicionales.".to_string()
+                                        } else {
+                                            format!(
+                                                "Conceptos: pagas extras {} · horas extra {} · variables {} · vacaciones {} · baja {} · deducciones {}.",
+                                                fmt_cents_eur(n.conceptos.pagas_extras_cents),
+                                                fmt_cents_eur(n.conceptos.horas_extra_cents),
+                                                fmt_cents_eur(n.conceptos.variables_cents),
+                                                fmt_cents_eur(n.conceptos.vacaciones_cents),
+                                                fmt_cents_eur(n.conceptos.bajas_cents),
+                                                fmt_cents_eur(n.conceptos.deducciones_cents)
+                                            )
+                                        };
+                                        format!(
+                                            "Bruto del periodo: {}\nBase de cotización aplicada: {}\nLa Seguridad Social se calcula sobre la base; el IRPF, sobre el bruto.\n{}",
+                                            fmt_cents_eur(n.bruto_cents),
+                                            fmt_cents_eur(n.base_cotizacion_cents),
+                                            conceptos
+                                        )
+                                    },
+                                );
                                 ui.label(fmt_cents_eur(n.ss_empleado_cents));
                                 ui.label(fmt_cents_eur(n.irpf_cents));
                                 ui.label(fmt_cents_eur(n.neto_cents));
                                 ui.label(fmt_cents_eur(n.coste_empresa_cents));
-                                let mut p = n.pagada;
-                                if ui.checkbox(&mut p, "").changed() {
-                                    pagada = Some((n.id, p));
-                                }
-                                ui.horizontal(|ui| {
+                                let color_estado = match n.estado {
+                                    EstadoNomina::Borrador => tema::SUAVE,
+                                    EstadoNomina::Revisada => tema::AMBAR,
+                                    EstadoNomina::Aprobada => tema::ACENTO,
+                                    EstadoNomina::Pagada => tema::VERDE,
+                                    EstadoNomina::Cerrada => tema::TEXTO,
+                                };
+                                ui.label(
+                                    RichText::new(n.estado.nombre())
+                                        .size(11.0)
+                                        .strong()
+                                        .color(color_estado),
+                                )
+                                .on_hover_text(if n.cerrada() {
+                                    "Nómina cerrada: no se puede modificar ni borrar. Usa un recibo de diferencias."
+                                } else {
+                                    "La nómina avanza un paso cada vez y guarda su expediente."
+                                });
+                                ui.horizontal_wrapped(|ui| {
                                     if ui
                                         .small_button("PDF")
-                                        .on_hover_text("Descarga un resumen borrador; no es el recibo oficial de salarios.")
+                                        .on_hover_text("Descarga el resumen de la nómina; no es el recibo oficial de salarios.")
                                         .clicked()
                                     {
                                         pdf_id = Some(n.id);
                                     }
-                                    if ui.small_button("Borrar").clicked() {
+                                    if ui
+                                        .small_button("Ver")
+                                        .on_hover_text("Abre la nómina explicada con su expediente de cálculo.")
+                                        .clicked()
+                                    {
+                                        explicada = Some(n.id);
+                                    }
+                                    let puede_conceptos = n.tipo == TipoNomina::Ordinaria
+                                        && n.estado == EstadoNomina::Borrador;
+                                    if ui
+                                        .add_enabled(
+                                            puede_conceptos,
+                                            egui::Button::new("Conceptos").small(),
+                                        )
+                                        .on_hover_text(if puede_conceptos {
+                                            "Añade pagas extras, horas extra, variables, vacaciones, bajas y deducciones, y previsualiza el bruto, la base, el neto y el coste."
+                                        } else {
+                                            "Sólo se editan en Borrador. En una nómina revisada o cerrada, corrige con un recibo de diferencias."
+                                        })
+                                        .clicked()
+                                    {
+                                        abrir_conceptos = Some(ConceptosBuf::desde(n));
+                                    }
+                                    if n.cerrada() {
+                                        ui.label(RichText::new("Cerrada").size(10.5).color(tema::TENUE));
+                                    } else if ui
+                                        .small_button(n.estado.accion())
+                                        .on_hover_text("Avanza un paso. Al llegar a Cerrada, la nómina queda bloqueada.")
+                                        .clicked()
+                                    {
+                                        avanzar = Some(n.id);
+                                    }
+                                    let puede_dif = n.tipo == TipoNomina::Ordinaria && n.estado.cerrada();
+                                    if ui
+                                        .add_enabled(puede_dif, egui::Button::new("Dif.").small())
+                                        .on_hover_text("Crea un recibo de diferencias enlazado a esta nómina cerrada. El original no se toca.")
+                                        .clicked()
+                                    {
+                                        abrir_diferencia = Some(DiferenciaBuf::desde(n, anyo_sel, mes_sel));
+                                    }
+                                    let borrar_resp = ui
+                                        .add_enabled(n.puede_borrar(), egui::Button::new("Borrar").small())
+                                        .on_hover_text(if n.puede_borrar() {
+                                            "Borra este borrador. A partir de Revisada la nómina queda protegida."
+                                        } else {
+                                            "Bloqueado: sólo se puede borrar en Borrador. Para corregir una nómina cerrada, crea un recibo de diferencias."
+                                        });
+                                    if borrar_resp.clicked() {
                                         borrar = Some(n.id);
                                     }
                                 });
@@ -4980,11 +5609,11 @@ impl App {
                             }
                         });
                 });
-            if let Some((id, p)) = pagada {
-                if let Some(n) = self.db.nominas.iter_mut().find(|n| n.id == id) {
-                    n.pagada = p;
+            if let Some(id) = avanzar {
+                match self.avanzar_nomina(id) {
+                    Ok(()) => self.avisar("Estado de la nómina actualizado.", false),
+                    Err(e) => self.avisar(e, true),
                 }
-                self.guardar();
             }
             if let Some(id) = pdf_id {
                 match self.exportar_nomina_pdf(id) {
@@ -4993,9 +5622,22 @@ impl App {
                 }
             }
             if let Some(id) = borrar {
-                self.db.nominas.retain(|n| n.id != id);
-                self.guardar();
-                self.avisar("Nómina borrada.", false);
+                self.confirmar = Some(Confirmacion {
+                    titulo: "Borrar nómina".into(),
+                    mensaje: "Se borrará este borrador de nómina. Esta acción no se puede deshacer."
+                        .into(),
+                    etiqueta: "Borrar nómina",
+                    accion: AccionConfirmada::BorrarNomina(id),
+                });
+            }
+            if let Some(id) = explicada {
+                self.nomina_explicada = Some(id);
+            }
+            if let Some(buf) = abrir_diferencia {
+                self.diferencia = Some(buf);
+            }
+            if let Some(buf) = abrir_conceptos {
+                self.conceptos = Some(buf);
             }
         }
         if let Some((codigo, anyo, tri)) = generar_retencion {
@@ -5019,6 +5661,679 @@ impl App {
             }
         }
         resultado
+    }
+
+    fn avanzar_nomina(&mut self, id: u64) -> Result<(), String> {
+        let resultado = self
+            .db
+            .nominas
+            .iter_mut()
+            .find(|n| n.id == id)
+            .ok_or("La nómina no existe.")?
+            .avanzar_estado();
+        resultado?;
+        self.guardar();
+        Ok(())
+    }
+
+    fn borrar_nomina(&mut self, id: u64) -> Result<(), String> {
+        let permitido = self
+            .db
+            .nominas
+            .iter()
+            .find(|n| n.id == id)
+            .map(|n| n.puede_borrar())
+            .ok_or("La nómina no existe.")?;
+        if !permitido {
+            return Err(
+                "No se puede borrar: la nómina ya está revisada o cerrada. Para corregirla, crea un recibo de diferencias."
+                    .into(),
+            );
+        }
+        self.db.nominas.retain(|n| n.id != id);
+        self.guardar();
+        Ok(())
+    }
+
+    /// Ventana de solo lectura con el expediente que se guardó al calcular la
+    /// nómina. No recalcula nada: si el expediente no cuadra con su huella, lo
+    /// advierte en lugar de ocultarlo.
+    fn ventana_nomina_explicada(&mut self, ctx: &egui::Context) {
+        let Some(id) = self.nomina_explicada else {
+            return;
+        };
+        let Some(n) = self.db.nominas.iter().find(|n| n.id == id).cloned() else {
+            self.nomina_explicada = None;
+            return;
+        };
+        let mut cerrar = false;
+        let mut abrir_diferencia = false;
+        let mut ver_origen = None;
+
+        egui::Window::new(format!("Nómina explicada · #{}", n.id))
+            .id(egui::Id::new("ventana_nomina_explicada"))
+            .collapsible(false)
+            .resizable(true)
+            .default_width(720.0)
+            .max_height(720.0)
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.heading(if n.tipo.diferencia() {
+                        "Recibo de diferencias"
+                    } else {
+                        "Nómina explicada"
+                    });
+                    ui.label(
+                        RichText::new(n.estado.nombre())
+                            .strong()
+                            .color(if n.cerrada() {
+                                tema::TEXTO
+                            } else {
+                                tema::ACENTO
+                            }),
+                    );
+                });
+                ui.label(
+                    RichText::new(format!(
+                        "{} · {} · periodo {:02}/{}",
+                        n.empleado_nombre, n.empleado_nif, n.mes, n.anyo
+                    ))
+                    .color(tema::SUAVE),
+                );
+                match &n.paquete {
+                    Some(p) => {
+                        ui.label(
+                            RichText::new(format!(
+                                "Paquete anual {} · vigente desde {} · {}",
+                                p.version, p.vigente_desde, p.fuente
+                            ))
+                            .size(10.5)
+                            .color(tema::TENUE),
+                        );
+                        if p.at_ep_estimado {
+                            ui.label(
+                                RichText::new(format!(
+                                    "AT/EP: {} estimado; la tarifa oficial depende de la actividad.",
+                                    fmt_pb(p.at_ep_empresa_pb)
+                                ))
+                                .size(10.5)
+                                .color(tema::AMBAR),
+                            );
+                        }
+                        if let Some(actual) = crate::nomina_paquetes::paquete_nomina(p.anyo) {
+                            if actual.version != p.version {
+                                ui.label(
+                                    RichText::new(format!(
+                                        "La versión instalada del paquete es {}; esta nómina conserva la copia de {}.",
+                                        actual.version, p.version
+                                    ))
+                                    .size(10.5)
+                                    .color(tema::TENUE),
+                                );
+                            } else if actual.huella() != p.huella() {
+                                ui.label(
+                                    RichText::new(
+                                        "La copia guardada del paquete no coincide con la versión instalada: revisa el expediente.",
+                                    )
+                                    .size(10.5)
+                                    .color(tema::AMBAR),
+                                );
+                            }
+                        }
+                    }
+                    None => {
+                        ui.label(
+                            RichText::new(
+                                "Nómina anterior a los paquetes anuales: no guarda el paquete de parámetros usado.",
+                            )
+                            .size(10.5)
+                            .color(tema::AMBAR),
+                        );
+                    }
+                }
+                if n.tipo.diferencia() {
+                    ui.label(
+                        RichText::new(format!(
+                            "Corrige la nómina cerrada #{}: {}",
+                            n.nomina_origen
+                                .map(|id| id.to_string())
+                                .unwrap_or_else(|| "—".to_string()),
+                            n.motivo_diferencia
+                        ))
+                        .color(tema::AMBAR),
+                    );
+                    if let Some(origen) = n.nomina_origen {
+                        if ui.small_button("Ver nómina original").clicked() {
+                            ver_origen = Some(origen);
+                        }
+                    }
+                }
+                ui.add_space(6.0);
+                egui::Grid::new("resumen_nomina_explicada")
+                    .num_columns(2)
+                    .spacing([18.0, 4.0])
+                    .show(ui, |ui| {
+                        for (etiqueta, valor) in [
+                            ("Bruto", fmt_cents_eur(n.bruto_cents)),
+                            ("SS trabajador", fmt_cents_eur(n.ss_empleado_cents)),
+                            ("IRPF", fmt_cents_eur(n.irpf_cents)),
+                            ("Neto", fmt_cents_eur(n.neto_cents)),
+                            ("SS empresa", fmt_cents_eur(n.ss_empresa_cents)),
+                            ("Coste empresa", fmt_cents_eur(n.coste_empresa_cents)),
+                        ] {
+                            ui.label(RichText::new(etiqueta).size(11.0).color(tema::SUAVE));
+                            ui.label(RichText::new(valor).monospace());
+                            ui.end_row();
+                        }
+                    });
+                ui.separator();
+
+                if let Some(exp) = &n.expediente {
+                    ui.label(
+                        RichText::new(format!(
+                            "Expediente v{} · generado {}",
+                            exp.version, exp.generado
+                        ))
+                        .size(10.5)
+                        .color(tema::TENUE),
+                    );
+                    ui.label(RichText::new(&exp.reglas).size(10.5).color(tema::SUAVE));
+                    ui.add_space(4.0);
+                    egui::ScrollArea::vertical()
+                        .id_salt("detalle_expediente_nomina")
+                        .max_height(330.0)
+                        .show(ui, |ui| {
+                            egui::Grid::new("lineas_expediente_nomina")
+                                .num_columns(3)
+                                .spacing([16.0, 5.0])
+                                .striped(true)
+                                .show(ui, |ui| {
+                                    ui.label(RichText::new("Concepto").strong());
+                                    ui.label(RichText::new("Cálculo").strong());
+                                    ui.label(RichText::new("Importe").strong());
+                                    ui.end_row();
+                                    let mut seccion = None;
+                                    for linea in &exp.lineas {
+                                        if seccion != Some(linea.seccion) {
+                                            seccion = Some(linea.seccion);
+                                            ui.label(
+                                                RichText::new(linea.seccion.nombre())
+                                                    .strong()
+                                                    .color(tema::ACENTO),
+                                            );
+                                            ui.label("");
+                                            ui.label("");
+                                            ui.end_row();
+                                        }
+                                        ui.label(&linea.etiqueta);
+                                        ui.add(egui::Label::new(&linea.formula).wrap());
+                                        ui.label(
+                                            RichText::new(fmt_cents_eur(linea.importe_cents))
+                                                .monospace(),
+                                        );
+                                        ui.end_row();
+                                    }
+                                });
+                        });
+                    ui.add_space(4.0);
+                    let valida = exp.huella_valida();
+                    ui.label(
+                        RichText::new(format!(
+                            "Huella del expediente: {} · {}",
+                            exp.huella,
+                            if valida {
+                                "íntegra"
+                            } else {
+                                "NO coincide: revisa los datos"
+                            }
+                        ))
+                        .size(10.0)
+                        .monospace()
+                        .color(if valida { tema::VERDE } else { tema::AMBAR }),
+                    );
+                } else {
+                    ui.label(
+                        RichText::new(
+                            "Esta nómina se generó antes de que se guardara el expediente de cálculo. No se puede reconstruir con garantías; usa el PDF o revisa la ficha original.",
+                        )
+                        .color(tema::AMBAR),
+                    );
+                }
+                ui.separator();
+                ui.horizontal(|ui| {
+                    if n.tipo == TipoNomina::Ordinaria && n.estado.cerrada() {
+                        if ui
+                            .button("Crear recibo de diferencias")
+                            .on_hover_text("Crea un recibo nuevo enlazado a esta nómina cerrada. El original no se modifica.")
+                            .clicked()
+                        {
+                            abrir_diferencia = true;
+                        }
+                    }
+                    if ui.button("Cerrar").clicked() {
+                        cerrar = true;
+                    }
+                });
+            });
+
+        if let Some(origen) = ver_origen {
+            self.nomina_explicada = Some(origen);
+        } else if abrir_diferencia {
+            self.diferencia = Some(DiferenciaBuf::desde(&n, n.anyo, n.mes));
+        } else if cerrar {
+            self.nomina_explicada = None;
+        }
+    }
+
+    fn ventana_diferencia(&mut self, ctx: &egui::Context) {
+        let Some(mut buf) = self.diferencia.clone() else {
+            return;
+        };
+        let Some(origen) = self.db.nominas.iter().find(|n| n.id == buf.origen_id).cloned()
+        else {
+            self.diferencia = None;
+            self.avisar("La nómina original ya no existe.", true);
+            return;
+        };
+        let mut crear = false;
+        let mut cerrar = false;
+        egui::Window::new("Recibo de diferencias")
+            .id(egui::Id::new("ventana_diferencia_nomina"))
+            .collapsible(false)
+            .resizable(false)
+            .default_width(540.0)
+            .show(ctx, |ui| {
+                ui.label(
+                    RichText::new(format!(
+                        "Nómina original #{} · {} · periodo {:02}/{}",
+                        origen.id, origen.empleado_nombre, origen.mes, origen.anyo
+                    ))
+                    .color(tema::SUAVE),
+                );
+                ui.label(
+                    RichText::new(
+                        "Escribe sólo las diferencias. Pueden ser negativas si devuelves dinero o regularizas a la baja. El recibo original no se modifica.",
+                    )
+                    .size(11.0)
+                    .color(tema::TENUE),
+                );
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    ui.label("Año");
+                    egui::ComboBox::from_id_salt("anyo_diferencia")
+                        .selected_text(buf.anyo.to_string())
+                        .width(85.0)
+                        .show_ui(ui, |ui| {
+                            for y in (Local::now().year() - 5)..=(Local::now().year() + 1) {
+                                ui.selectable_value(&mut buf.anyo, y, y.to_string());
+                            }
+                        });
+                    ui.label("Mes");
+                    egui::ComboBox::from_id_salt("mes_diferencia")
+                        .selected_text(
+                            MESES_NOMINA[(buf.mes.saturating_sub(1) as usize).min(11)],
+                        )
+                        .width(120.0)
+                        .show_ui(ui, |ui| {
+                            for (i, nombre) in MESES_NOMINA.iter().enumerate() {
+                                ui.selectable_value(&mut buf.mes, i as u32 + 1, *nombre);
+                            }
+                        });
+                });
+                ui.add_space(4.0);
+                egui::Grid::new("importes_diferencia")
+                    .num_columns(2)
+                    .spacing([12.0, 6.0])
+                    .show(ui, |ui| {
+                        ui.label("Bruto (diferencia)");
+                        ui.add(
+                            egui::TextEdit::singleline(&mut buf.bruto)
+                                .desired_width(150.0)
+                                .hint_text("0,00"),
+                        );
+                        ui.end_row();
+                        ui.label("SS trabajador (diferencia)");
+                        ui.add(
+                            egui::TextEdit::singleline(&mut buf.ss_empleado)
+                                .desired_width(150.0)
+                                .hint_text("0,00"),
+                        );
+                        ui.end_row();
+                        ui.label("IRPF (diferencia)");
+                        ui.add(
+                            egui::TextEdit::singleline(&mut buf.irpf)
+                                .desired_width(150.0)
+                                .hint_text("0,00"),
+                        );
+                        ui.end_row();
+                        ui.label("SS empresa (diferencia)");
+                        ui.add(
+                            egui::TextEdit::singleline(&mut buf.ss_empresa)
+                                .desired_width(150.0)
+                                .hint_text("0,00"),
+                        );
+                        ui.end_row();
+                    });
+                ui.add_space(4.0);
+                ui.label("Motivo de la corrección");
+                ui.add(
+                    egui::TextEdit::multiline(&mut buf.motivo)
+                        .desired_width(f32::INFINITY)
+                        .desired_rows(2)
+                        .hint_text("Ej.: atraso de convenio, diferencia de IT, regularización de IRPF…"),
+                );
+                if let Some((bruto, ss_empleado, irpf, ss_empresa)) = buf.importes() {
+                    ui.add_space(4.0);
+                    ui.label(
+                        RichText::new(format!(
+                            "Neto de la diferencia: {} · coste de empresa: {}",
+                            fmt_cents_eur(bruto - ss_empleado - irpf),
+                            fmt_cents_eur(bruto + ss_empresa)
+                        ))
+                        .size(11.0)
+                        .color(tema::SUAVE),
+                    );
+                }
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    if ui
+                        .add_enabled(buf.valido(), egui::Button::new("Crear recibo"))
+                        .on_hover_text("Crea un borrador enlazado a la nómina original. Después podrás revisarlo, aprobarlo, pagarlo y cerrarlo.")
+                        .clicked()
+                    {
+                        crear = true;
+                    }
+                    if ui.button("Cancelar").clicked() {
+                        cerrar = true;
+                    }
+                });
+            });
+
+        if crear {
+            if let Some((bruto, ss_empleado, irpf, ss_empresa)) = buf.importes() {
+                match crate::empleados::crear_diferencia(
+                    &mut self.db.nominas,
+                    buf.origen_id,
+                    &mut self.db.next_id,
+                    buf.anyo,
+                    buf.mes,
+                    &buf.motivo,
+                    bruto,
+                    ss_empleado,
+                    irpf,
+                    ss_empresa,
+                ) {
+                    Ok(id) => {
+                        self.diferencia = None;
+                        self.nomina_explicada = Some(id);
+                        self.nomina_anyo = buf.anyo;
+                        self.nomina_mes = buf.mes;
+                        self.guardar();
+                        self.avisar("Recibo de diferencias creado como borrador.", false);
+                    }
+                    Err(e) => {
+                        self.avisar(e, true);
+                        self.diferencia = Some(buf);
+                    }
+                }
+            } else {
+                self.diferencia = Some(buf);
+            }
+        } else if cerrar {
+            self.diferencia = None;
+        } else {
+            self.diferencia = Some(buf);
+        }
+    }
+
+    /// Editor de conceptos e incidencias de una nómina en Borrador. La
+    /// previsualización se calcula con el mismo motor que la nómina real; no
+    /// guarda nada hasta pulsar el botón.
+    fn ventana_conceptos(&mut self, ctx: &egui::Context) {
+        let Some(mut buf) = self.conceptos.clone() else {
+            return;
+        };
+        let Some(n) = self.db.nominas.iter().find(|n| n.id == buf.nomina_id).cloned() else {
+            self.conceptos = None;
+            self.avisar("La nómina ya no existe.", true);
+            return;
+        };
+        let Some(empleado) = self
+            .db
+            .empleados
+            .iter()
+            .find(|e| e.id == n.empleado_id)
+            .cloned()
+        else {
+            self.conceptos = None;
+            self.avisar(
+                "No encuentro la ficha del empleado: no se pueden recalcular los conceptos.",
+                true,
+            );
+            return;
+        };
+        let editable = n.tipo == TipoNomina::Ordinaria && n.estado == EstadoNomina::Borrador;
+        let mut guardar = false;
+        let mut cerrar = false;
+
+        egui::Window::new(format!("Conceptos e incidencias · nómina #{}", n.id))
+            .id(egui::Id::new("ventana_conceptos_nomina"))
+            .collapsible(false)
+            .resizable(true)
+            .default_width(620.0)
+            .max_height(780.0)
+            .show(ctx, |ui| {
+                ui.label(
+                    RichText::new(format!(
+                        "{} · {} · periodo {:02}/{}",
+                        n.empleado_nombre, n.empleado_nif, n.mes, n.anyo
+                    ))
+                    .color(tema::SUAVE),
+                );
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new(format!("Estado: {}", n.estado.nombre()))
+                            .strong()
+                            .color(if editable { tema::ACENTO } else { tema::AMBAR }),
+                    );
+                    if !editable {
+                        ui.label(
+                            RichText::new(
+                                "Sólo se edita en Borrador; para una nómina revisada o cerrada usa un recibo de diferencias.",
+                            )
+                            .size(10.5)
+                            .color(tema::AMBAR),
+                        );
+                    }
+                });
+                ui.label(
+                    RichText::new(
+                        "Los conceptos retributivos suman al bruto y a la base; el descuento por baja resta del bruto; las deducciones restan sólo del neto. Los días de vacaciones y baja son informativos si no indicas importe.",
+                    )
+                    .size(10.5)
+                    .color(tema::TENUE),
+                );
+                ui.add_space(5.0);
+
+                egui::ScrollArea::vertical()
+                    .id_salt("conceptos_nomina_scroll")
+                    .max_height(420.0)
+                    .auto_shrink([false, true])
+                    .show(ui, |ui| {
+                        egui::Grid::new("form_conceptos_nomina")
+                            .num_columns(2)
+                            .spacing([12.0, 6.0])
+                            .show(ui, |ui| {
+                                campo_h(
+                                    ui,
+                                    "Pagas extras (importe)",
+                                    &mut buf.pagas_extras,
+                                    "Paga o pagas extras devengadas en el mes. Suma al bruto y a la base de cotización, con los topes del grupo.",
+                                );
+                                campo_h(
+                                    ui,
+                                    "Horas extra (importe)",
+                                    &mut buf.horas_extra,
+                                    "Importe de las horas extra. La estimación aplica los tipos generales del paquete; no modela la cotización adicional específica de horas extra.",
+                                );
+                                campo_h(
+                                    ui,
+                                    "Variables y complementos (importe)",
+                                    &mut buf.variables,
+                                    "Bonus, incentivos o complementos variables del mes. Suma al bruto y a la base.",
+                                );
+                                campo_h(
+                                    ui,
+                                    "Días de vacaciones",
+                                    &mut buf.vacaciones_dias,
+                                    "Días informativos de vacaciones del mes. No reducen el salario por sí solos.",
+                                );
+                                campo_h(
+                                    ui,
+                                    "Vacaciones (importe)",
+                                    &mut buf.vacaciones,
+                                    "Compensación económica de vacaciones, si procede. Suma al bruto y a la base; déjalo a cero si las vacaciones ya están incluidas en el salario.",
+                                );
+                                campo_h(
+                                    ui,
+                                    "Días de baja",
+                                    &mut buf.bajas_dias,
+                                    "Días informativos de baja del mes. El efecto económico se indica en el descuento.",
+                                );
+                                campo_h(
+                                    ui,
+                                    "Descuento por baja (importe)",
+                                    &mut buf.bajas,
+                                    "Importe que se resta del bruto por la baja. Positivo = descuento. No se calcula automáticamente la prestación de IT.",
+                                );
+                                campo_h(
+                                    ui,
+                                    "Otras deducciones (importe)",
+                                    &mut buf.deducciones,
+                                    "Anticipos, cuotas sindicales u otras deducciones. Restan del neto; no reducen el bruto, la base ni el IRPF.",
+                                );
+                            });
+
+                        ui.add_space(4.0);
+                        ui.label(RichText::new("Nota para el expediente").size(11.0).color(tema::SUAVE));
+                        ui.add(
+                            egui::TextEdit::multiline(&mut buf.nota)
+                                .desired_width(f32::INFINITY)
+                                .desired_rows(2)
+                                .hint_text("Ej.: paga extra de junio, horas de inventario, baja por gripe…"),
+                        );
+                    });
+
+                ui.add_space(5.0);
+                if let Some(conceptos) = buf.conceptos() {
+                    let preview =
+                        Nomina::calcular_con_conceptos(&empleado, n.id, n.anyo, n.mes, &conceptos);
+                    ui.separator();
+                    ui.label(RichText::new("Previsualización del efecto").strong());
+                    egui::Grid::new("preview_conceptos_nomina")
+                        .num_columns(4)
+                        .spacing([18.0, 4.0])
+                        .striped(true)
+                        .show(ui, |ui| {
+                            for cabecera in ["Magnitud", "Ahora", "Con conceptos", "Diferencia"] {
+                                ui.label(
+                                    RichText::new(cabecera)
+                                        .size(10.5)
+                                        .strong()
+                                        .color(tema::TENUE),
+                                );
+                            }
+                            ui.end_row();
+                            for (etiqueta, actual, nuevo) in [
+                                ("Bruto", n.bruto_cents, preview.bruto_cents),
+                                ("Base de cotización", n.base_cotizacion_cents, preview.base_cotizacion_cents),
+                                ("Neto", n.neto_cents, preview.neto_cents),
+                                ("Coste empresa", n.coste_empresa_cents, preview.coste_empresa_cents),
+                            ] {
+                                let delta = nuevo - actual;
+                                ui.label(RichText::new(etiqueta).size(11.0).color(tema::SUAVE));
+                                ui.label(RichText::new(fmt_cents_eur(actual)).monospace());
+                                ui.label(RichText::new(fmt_cents_eur(nuevo)).monospace());
+                                ui.label(
+                                    RichText::new(if delta == 0 {
+                                        "—".to_string()
+                                    } else {
+                                        format!(
+                                            "{}{}",
+                                            if delta > 0 { "+" } else { "" },
+                                            fmt_cents_eur(delta)
+                                        )
+                                    })
+                                    .monospace()
+                                    .color(if delta == 0 {
+                                        tema::TENUE
+                                    } else {
+                                        tema::ACENTO
+                                    }),
+                                );
+                                ui.end_row();
+                            }
+                        });
+                    ui.label(
+                        RichText::new(
+                            "La vista previa usa la ficha actual del empleado y el paquete anual del periodo. Guardar sustituye el cálculo del borrador y deja su expediente actualizado.",
+                        )
+                        .size(10.5)
+                        .color(tema::TENUE),
+                    );
+                } else {
+                    ui.label(
+                        RichText::new(
+                            "Revisa los importes y los días: hay un valor que no se puede interpretar. Los importes aceptan coma decimal y los días deben ser enteros entre 0 y 31.",
+                        )
+                        .color(tema::AMBAR),
+                    );
+                }
+
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    let puede_guardar = editable && buf.conceptos().is_some();
+                    if ui
+                        .add_enabled(puede_guardar, egui::Button::new("Guardar y recalcular"))
+                        .on_hover_text("Recalcula el borrador con estos conceptos y guarda el expediente. No se puede usar en una nómina revisada o cerrada.")
+                        .clicked()
+                    {
+                        guardar = true;
+                    }
+                    if ui.button("Cancelar").clicked() {
+                        cerrar = true;
+                    }
+                });
+            });
+
+        if guardar {
+            if let Some(conceptos) = buf.conceptos() {
+                let resultado = self
+                    .db
+                    .nominas
+                    .iter_mut()
+                    .find(|n| n.id == buf.nomina_id)
+                    .ok_or_else(|| "La nómina ya no existe.".to_string())
+                    .and_then(|n| n.actualizar_conceptos(&empleado, conceptos));
+                match resultado {
+                    Ok(()) => {
+                        self.conceptos = None;
+                        self.guardar();
+                        self.avisar("Conceptos guardados; nómina recalculada.", false);
+                    }
+                    Err(e) => {
+                        self.conceptos = Some(buf);
+                        self.avisar(e, true);
+                    }
+                }
+            } else {
+                self.conceptos = Some(buf);
+            }
+        } else if cerrar {
+            self.conceptos = None;
+        } else {
+            self.conceptos = Some(buf);
+        }
     }
 
     fn vista_clientes(&mut self, ui: &mut egui::Ui) {
@@ -5247,9 +6562,21 @@ impl App {
                 if usado {
                     self.avisar("No se puede borrar: tiene documentos asociados.", true);
                 } else {
-                    self.db.clientes.retain(|c| c.id != id);
-                    self.guardar();
-                    self.ficha_cliente = None;
+                    let nombre = self
+                        .db
+                        .clientes
+                        .iter()
+                        .find(|c| c.id == id)
+                        .map(|c| c.etiqueta())
+                        .unwrap_or_else(|| "este cliente".to_string());
+                    self.confirmar = Some(Confirmacion {
+                        titulo: "Borrar cliente".into(),
+                        mensaje: format!(
+                            "Se borrará el cliente {nombre}. Esta acción no se puede deshacer."
+                        ),
+                        etiqueta: "Borrar cliente",
+                        accion: AccionConfirmada::BorrarCliente(id),
+                    });
                 }
             }
         });
@@ -5285,7 +6612,11 @@ impl App {
                 .id_salt("lista_articulos")
                 .show(&mut cols[0], |ui| {
                     if self.db.articulos.is_empty() {
-                        ui.label("Sin artículos todavía.");
+                        tema::vacio(
+                            ui,
+                            "Sin artículos todavía",
+                            "Pulsa «+ Nuevo artículo» para crear el primero.",
+                        );
                     }
                     let mut abrir: Option<usize> = None;
                     for (i, a) in self.db.articulos.iter().enumerate() {
@@ -5404,9 +6735,21 @@ impl App {
                 self.ficha_articulo = None;
             }
             if let Some(id) = borrar_id {
-                self.db.articulos.retain(|a| a.id != id);
-                self.guardar();
-                self.ficha_articulo = None;
+                let nombre = self
+                    .db
+                    .articulos
+                    .iter()
+                    .find(|a| a.id == id)
+                    .map(|a| a.descripcion.clone())
+                    .unwrap_or_else(|| "este artículo".to_string());
+                self.confirmar = Some(Confirmacion {
+                    titulo: "Borrar artículo".into(),
+                    mensaje: format!(
+                        "Se borrará «{nombre}» del catálogo. Esta acción no se puede deshacer."
+                    ),
+                    etiqueta: "Borrar artículo",
+                    accion: AccionConfirmada::BorrarArticulo(id),
+                });
             }
         });
     }
@@ -5923,16 +7266,15 @@ impl App {
                     self.guardar();
                     self.avisar(format!("Ejercicio {} reabierto.", self.anyo), false);
                 } else {
-                    self.db.cerrados.push(self.anyo);
-                    self.db.cerrados.sort_unstable();
-                    self.guardar();
-                    self.avisar(
-                        format!(
-                            "Ejercicio {} cerrado: no se emitirán documentos con esa fecha.",
+                    self.confirmar = Some(Confirmacion {
+                        titulo: "Cerrar ejercicio".into(),
+                        mensaje: format!(
+                            "Se cerrará {}: no se podrán emitir documentos con esa fecha. Podrás reabrirlo desde Contabilidad.",
                             self.anyo
                         ),
-                        false,
-                    );
+                        etiqueta: "Cerrar ejercicio",
+                        accion: AccionConfirmada::CerrarEjercicio(self.anyo),
+                    });
                 }
             }
             if cerrado {
@@ -6972,7 +8314,7 @@ impl App {
                 }
                 if ui.button("Abrir carpeta de datos").clicked() {
                     if let Some(dir) = self.db.ruta.parent() {
-                        let _ = std::process::Command::new("explorer").arg(dir).spawn();
+                        abrir_carpeta(dir);
                     }
                 }
             });
@@ -7008,7 +8350,7 @@ impl App {
                 if ui.button("Abrir carpeta de copias").clicked() {
                     let dir = self.db.dir_copias();
                     let _ = std::fs::create_dir_all(&dir);
-                    let _ = std::process::Command::new("explorer").arg(&dir).spawn();
+                    abrir_carpeta(&dir);
                 }
             });
 
@@ -7465,7 +8807,7 @@ impl App {
     }
 
     fn ventana_xml(&mut self, ctx: &egui::Context) {
-        let Some((nombre, xml)) = self.ver_xml.clone() else {
+        let Some((nombre, xml, ruta)) = self.ver_xml.clone() else {
             return;
         };
         let mut abierto = true;
@@ -7473,8 +8815,22 @@ impl App {
             .open(&mut abierto)
             .default_size([720.0, 520.0])
             .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new("Validar contra Facturaev3_2_2.xsd antes de usarlo con FACe.")
+                            .small()
+                            .color(egui::Color32::from_gray(110)),
+                    );
+                    if ui
+                        .small_button("Abrir carpeta")
+                        .on_hover_text("Abre la carpeta donde se guardó este XML.")
+                        .clicked()
+                    {
+                        mostrar_en_carpeta(&ruta);
+                    }
+                });
                 ui.label(
-                    RichText::new("Validar contra Facturaev3_2_2.xsd antes de usarlo con FACe.")
+                    RichText::new(ruta.display().to_string())
                         .small()
                         .color(egui::Color32::from_gray(110)),
                 );

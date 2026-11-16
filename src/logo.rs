@@ -7,6 +7,13 @@
 
 use std::path::PathBuf;
 
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
+
+/// Evita que PowerShell muestre una consola al elegir o normalizar el logo.
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
 pub struct Jpeg {
     pub datos: Vec<u8>,
     pub ancho: u32,
@@ -84,7 +91,16 @@ pub fn elegir() -> Option<String> {
         $d.Filter = 'Imagenes|*.jpg;*.jpeg;*.png;*.bmp;*.gif|Todos los archivos|*.*'; \
         if ($d.ShowDialog() -eq 'OK') { $d.FileName }";
     let salida = std::process::Command::new("powershell")
-        .args(["-NoProfile", "-NonInteractive", "-STA", "-Command", script])
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-WindowStyle",
+            "Hidden",
+            "-STA",
+            "-Command",
+            script,
+        ])
+        .creation_flags(CREATE_NO_WINDOW)
         .output()
         .ok()?;
     let ruta = String::from_utf8_lossy(&salida.stdout).trim().to_string();
@@ -123,7 +139,15 @@ pub fn normalizar(origen: &str) -> Result<String, String> {
          $g.Dispose(); $bmp.Dispose(); $img.Dispose()"
     );
     let salida = std::process::Command::new("powershell")
-        .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-WindowStyle",
+            "Hidden",
+            "-Command",
+            &script,
+        ])
+        .creation_flags(CREATE_NO_WINDOW)
         .output()
         .map_err(|e| format!("No se pudo abrir la imagen: {e}"))?;
     if !salida.status.success() {

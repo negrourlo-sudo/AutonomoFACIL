@@ -190,6 +190,15 @@ pub fn icono_ayuda(ui: &mut egui::Ui, titulo: &str, texto: &str) -> Response {
     if hovered {
         ui.ctx().set_cursor_icon(egui::CursorIcon::Help);
     }
+    // El icono no tiene texto visible: que AccessKit anuncie al menos qué
+    // ayuda representa. El contenido completo sigue en el tooltip.
+    respuesta.widget_info(|| {
+        egui::WidgetInfo::labeled(
+            egui::WidgetType::Label,
+            ui.is_enabled(),
+            format!("Ayuda: {titulo}"),
+        )
+    });
     respuesta.on_hover_ui(|ui| ayuda_emergente(ui, titulo, texto))
 }
 
@@ -271,6 +280,15 @@ pub fn boton_primario(ui: &mut egui::Ui, texto: &str) -> Response {
     )
 }
 
+/// Botón para una acción destructiva: rojo y texto blanco.
+pub fn boton_peligro(ui: &mut egui::Ui, texto: &str) -> Response {
+    ui.add(
+        egui::Button::new(RichText::new(texto).size(13.0).strong().color(Color32::WHITE))
+            .fill(ROJO)
+            .rounding(egui::Rounding::same(8.0)),
+    )
+}
+
 /// Botón secundario, discreto.
 pub fn boton_suave(ui: &mut egui::Ui, texto: &str) -> Response {
     ui.add(
@@ -326,6 +344,16 @@ pub fn nav(ui: &mut egui::Ui, activo: bool, texto: &str) -> Response {
     if resp.hovered() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
+    // El dibujo es propio: sin esta información, un lector de pantalla vería
+    // una zona vacía en vez de la sección de navegación.
+    resp.widget_info(|| {
+        egui::WidgetInfo::selected(
+            egui::WidgetType::SelectableLabel,
+            ui.is_enabled(),
+            activo,
+            texto,
+        )
+    });
     resp
 }
 

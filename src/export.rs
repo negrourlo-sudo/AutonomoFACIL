@@ -158,10 +158,17 @@ fn slug_empleado(empleado: &Empleado) -> String {
     }
 }
 
-/// `Nomina-2026-01-0003-ana-garcia-ruiz.pdf`.
+/// `Nomina-2026-01-0003-ana-garcia-ruiz.pdf` o
+/// `Diferencia-2026-02-0004-ana-garcia-ruiz.pdf`.
 pub fn nombre_nomina(n: &Nomina, empleado: &Empleado) -> String {
+    let prefijo = if n.tipo.diferencia() {
+        "Diferencia"
+    } else {
+        "Nomina"
+    };
     format!(
-        "Nomina-{:04}-{:02}-{:04}-{}.pdf",
+        "{}-{:04}-{:02}-{:04}-{}.pdf",
+        prefijo,
         n.anyo,
         n.mes,
         n.id,
@@ -262,5 +269,54 @@ mod tests {
             nombre_informe(2026, &empresa()),
             "Informe-2026-estudio-nandu-s-l.txt"
         );
+    }
+
+    #[test]
+    fn el_pdf_y_el_facturae_comparten_la_carpeta_del_documento() {
+        let doc = factura();
+        let empresa = empresa();
+        let dir = dir_documento(&doc, &empresa);
+        let pdf = dir.join(crate::pdf::nombre_fichero(&doc));
+        let xml = dir.join(crate::facturae::nombre_fichero(&doc));
+
+        assert_eq!(pdf.parent(), xml.parent());
+        assert_eq!(pdf.extension().and_then(|s| s.to_str()), Some("pdf"));
+        assert_eq!(xml.extension().and_then(|s| s.to_str()), Some("xml"));
+    }
+
+    #[test]
+    fn nominas_modelos_y_contabilidad_corresponden_a_su_carpeta() {
+        let empresa = empresa();
+        let empleado = Empleado {
+            nombre: "Ana".into(),
+            apellidos: "García".into(),
+            ..Default::default()
+        };
+
+        let nomina = dir_nomina(&empresa, &empleado);
+        assert_eq!(nomina.file_name().unwrap().to_string_lossy(), "Ana García");
+        assert_eq!(
+            nomina.parent().unwrap().file_name().unwrap().to_string_lossy(),
+            "Nominas"
+        );
+        assert_eq!(
+            nomina
+                .parent()
+                .unwrap()
+                .parent()
+                .unwrap()
+                .file_name()
+                .unwrap()
+                .to_string_lossy(),
+            "Estudio Ñandú S.L"
+        );
+
+        for (ruta, carpeta) in [(dir_modelos(&empresa), "Modelos"), (dir_contabilidad(&empresa), "Contabilidad")] {
+            assert_eq!(ruta.file_name().unwrap().to_string_lossy(), carpeta);
+            assert_eq!(
+                ruta.parent().unwrap().file_name().unwrap().to_string_lossy(),
+                "Estudio Ñandú S.L"
+            );
+        }
     }
 }
