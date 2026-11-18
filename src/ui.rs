@@ -627,11 +627,14 @@ fn bloque_licencia(ui: &mut egui::Ui) {
             });
         });
         ui.add_space(8.0);
-        ui.label(
-            RichText::new(licencia::ATRIBUCION)
-                .size(11.5)
-                .strong()
-                .color(tema::TEXTO),
+        ui.add(
+            egui::Label::new(
+                RichText::new(licencia::ATRIBUCION)
+                    .size(11.5)
+                    .strong()
+                    .color(tema::TEXTO),
+            )
+            .wrap(),
         );
         ui.add_space(2.0);
         ui.add(
@@ -1889,7 +1892,7 @@ impl eframe::App for App {
             )
             .show(ctx, |ui| {
                 ui.label(
-                    RichText::new("AutónomoFACIL")
+                    RichText::new(crate::version::PRODUCTO)
                         .size(19.0)
                         .strong()
                         .color(tema::TEXTO),

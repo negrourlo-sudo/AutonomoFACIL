@@ -1,4 +1,4 @@
-﻿; Instalador NSIS de AutónomoFACIL, con asistente e imágenes propias.
+﻿; Instalador NSIS de AutónomoFácil, con asistente e imágenes propias.
 ;
 ;   bash empaquetar-nsis.sh
 ;
@@ -13,7 +13,7 @@
 ; Decisiones:
 ;  · RequestExecutionLevel user -> sin administrador. Instala en
 ;    %LOCALAPPDATA%\Programs y registra el desinstalador en HKCU.
-;  · Unicode true: el .nsi va en UTF-8 y los acentos de "AutónomoFACIL" salen bien.
+;  · Unicode true: el .nsi va en UTF-8 y los acentos de "AutónomoFácil" salen bien.
 ;  · La página de aviso (aviso.txt) deja claro qué NO hace el programa, porque
 ;    un instalador que promete cumplimiento normativo y no lo tiene es peor que
 ;    uno feo.
@@ -25,26 +25,26 @@ Unicode true
 !include "LogicLib.nsh"
 !include "nsDialogs.nsh"
 
-!define APP_NAME    "AutónomoFACIL"
-!define APP_AUTHOR  "FranciscoNicolás"
+!define APP_NAME    "AutónomoFácil"
+!define APP_AUTHOR  "Francisco Nicolás"
 !define APP_EXE     "autonomofacil.exe"
 !define APP_PROC    "autonomofacil"
 ; La versión llega desde `empaquetar-nsis.sh` (que la lee de src/version.rs).
 ; Si se compila a mano, aquí queda el valor por defecto.
 !ifndef APP_VERSION
-!define APP_VERSION "0.7.7.0"
+!define APP_VERSION "0.7.8.0"
 !endif
 ; Windows quiere cuatro números en la versión del fichero.
 !ifndef APP_VERSION4
-!define APP_VERSION4 "0.7.7.0"
+!define APP_VERSION4 "0.7.8.0"
 !endif
-!define APP_KEY     "AutonomoFACIL"
+!define APP_KEY     "AutonomoFacil"
 !define ORIGEN      "..\dist"
 !define ARTE        "."
 !define CLAVE       "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APP_KEY}"
 
 Name "${APP_NAME}"
-OutFile "${ORIGEN}\AutonomoFACIL-NSIS.exe"
+OutFile "${ORIGEN}\AutonomoFacil-NSIS.exe"
 InstallDir "$LOCALAPPDATA\Programs\${APP_KEY}"
 InstallDirRegKey HKCU "Software\${APP_KEY}" "InstallDir"
 RequestExecutionLevel user
@@ -95,13 +95,13 @@ Se instala solo para tu usuario: no hace falta administrador y no se toca \
 ningún archivo del sistema.$\r$\n$\r$\nPulsa Siguiente para continuar."
 
 !define MUI_LICENSEPAGE_TEXT_TOP  "Lee el aviso legal y la licencia antes de continuar."
-!define MUI_LICENSEPAGE_TEXT_BOTTOM "Código y contenidos propios bajo CC BY-SA 4.0. Si necesitas un sistema conforme al RD 1007/2023, este programa todavía no lo es por sí solo."
+!define MUI_LICENSEPAGE_TEXT_BOTTOM "AutónomoFácil © 2026 de Francisco Nicolás está bajo la licencia CC BY-SA 4.0. Para ver una copia de esta licencia, visite https://creativecommons.org/licenses/by-sa/4.0/ Si necesitas un sistema conforme al RD 1007/2023, este programa todavía no lo es por sí solo."
 
 !define MUI_DIRECTORYPAGE_TEXT_TOP "Elige dónde instalar ${APP_NAME}. Por defecto va en tu carpeta de usuario, sin permisos especiales."
 
 !define MUI_FINISHPAGE_TITLE       "${APP_NAME} ya está instalado"
 !define MUI_FINISHPAGE_TEXT        "Puedes abrirlo desde el menú Inicio o el acceso directo del escritorio.$\r$\n$\r$\n\
-Tus datos se guardan en:%$\r$\n%APPDATA%\AutonomoFACIL$\r$\n$\r$\n\
+Tus datos se guardan en:%$\r$\n%APPDATA%\AutonomoFacil$\r$\n$\r$\n\
 Al desinstalar podrás decidir si quieres borrarlos también."
 !define MUI_FINISHPAGE_RUN         "$INSTDIR\${APP_EXE}"
 !define MUI_FINISHPAGE_RUN_TEXT    "Abrir ${APP_NAME}"
@@ -128,7 +128,7 @@ Function .onInit
   StrCpy $RollbackActivo "0"
   StrCpy $InstalacionPrevia "0"
   StrCpy $VersionPrevia ""
-  StrCpy $CarpetaCopia "$TEMP\AutonomoFACIL-backup-${APP_VERSION4}"
+  StrCpy $CarpetaCopia "$TEMP\AutonomoFacil-backup-${APP_VERSION4}"
 FunctionEnd
 
 Function ComprobarAppCerrada
@@ -293,6 +293,11 @@ Section "Instalar ${APP_NAME}" SecPrincipal
   SetShellVarContext current
   Call ComprobarAppCerrada
   Call PrepararCopia
+  ; Quita los accesos de la marca anterior, si existen.
+  Delete "$SMPROGRAMS\AutónomoFACIL\AutónomoFACIL.lnk"
+  Delete "$SMPROGRAMS\AutónomoFACIL\Desinstalar AutónomoFACIL.lnk"
+  RMDir "$SMPROGRAMS\AutónomoFACIL"
+  Delete "$DESKTOP\AutónomoFACIL.lnk"
   SetOutPath "$INSTDIR"
   SetOverwrite on
   File "${ORIGEN}\${APP_EXE}"
@@ -347,7 +352,7 @@ Function un.PaginaDatos
     Abort
   ${EndIf}
 
-  ${NSD_CreateLabel} 0 0 100% 46u "La aplicación guarda tus datos, exportaciones, nóminas y copias de seguridad en:%$\r$\n$APPDATA\AutonomoFACIL%$\r$\nSi vienes de una versión anterior, también puede existir $APPDATA\Facturacion."
+  ${NSD_CreateLabel} 0 0 100% 46u "La aplicación guarda tus datos, exportaciones, nóminas y copias de seguridad en:%$\r$\n$APPDATA\AutonomoFacil%$\r$\nSi vienes de una versión anterior, también puede existir $APPDATA\Facturacion."
   Pop $0
 
   ${NSD_CreateCheckbox} 0 54u 100% 20u "Borrar también todos mis datos, exportaciones y copias de seguridad"
@@ -375,6 +380,12 @@ Section "Uninstall"
   SetShellVarContext current
   Call un.ComprobarAppCerrada
 
+  ; Quita también los accesos de la marca anterior.
+  Delete "$SMPROGRAMS\AutónomoFACIL\AutónomoFACIL.lnk"
+  Delete "$SMPROGRAMS\AutónomoFACIL\Desinstalar AutónomoFACIL.lnk"
+  RMDir "$SMPROGRAMS\AutónomoFACIL"
+  Delete "$DESKTOP\AutónomoFACIL.lnk"
+
   Delete "$INSTDIR\${APP_EXE}"
   Delete "$INSTDIR\icono.ico"
   Delete "$INSTDIR\Desinstalar.exe"
@@ -393,11 +404,11 @@ Section "Uninstall"
   ; a cero, así que también se conservan por defecto.
   ${If} $BorrarDatos == "1"
     DetailPrint "Borrando datos, exportaciones y copias de seguridad..."
-    RMDir /r "$APPDATA\AutonomoFACIL"
+    RMDir /r "$APPDATA\AutonomoFacil"
     RMDir /r "$APPDATA\Facturacion"
-    ${If} ${FileExists} "$APPDATA\AutonomoFACIL\*.*"
+    ${If} ${FileExists} "$APPDATA\AutonomoFacil\*.*"
     ${OrIf} ${FileExists} "$APPDATA\Facturacion\*.*"
-      MessageBox MB_ICONEXCLAMATION|MB_OK "No se pudieron borrar todos los datos. Cierra AutónomoFACIL y vuelve a intentarlo, o borra a mano: $APPDATA\AutonomoFACIL y $APPDATA\Facturacion"
+      MessageBox MB_ICONEXCLAMATION|MB_OK "No se pudieron borrar todos los datos. Cierra AutónomoFácil y vuelve a intentarlo, o borra a mano: $APPDATA\AutonomoFacil y $APPDATA\Facturacion"
     ${EndIf}
   ${EndIf}
 SectionEnd

@@ -262,7 +262,7 @@ const GUIA_111: Guia = Guia {
         "Presenta y guarda el justificante; el 190 resume el año y debe cuadrar con los cuatro 111.",
     ],
     fichero: "Admite fichero con el diseño de registro oficial, cómodo si hay muchos empleados; el formulario sirve para pocos.",
-    aviso: "Plazo: 1–20 del mes siguiente a cada trimestre. Este borrador de AutónomoFACIL sólo suma las nóminas generadas: 01 perceptores, 02 percepciones íntegras (bruto) y 03 retenciones. La base de cotización no se usa en el 111. No incluye facturas de profesionales, rentas en especie ni otros pagos; los recibos de diferencias se suman al periodo en que se registran. Si no hay nóminas ni retenciones, no se presenta.",
+    aviso: "Plazo: 1–20 del mes siguiente a cada trimestre. Este borrador de AutónomoFácil sólo suma las nóminas generadas: 01 perceptores, 02 percepciones íntegras (bruto) y 03 retenciones. La base de cotización no se usa en el 111. No incluye facturas de profesionales, rentas en especie ni otros pagos; los recibos de diferencias se suman al periodo en que se registran. Si no hay nóminas ni retenciones, no se presenta.",
 };
 
 const GUIA_115: Guia = Guia {

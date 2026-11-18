@@ -131,7 +131,7 @@ fn obligaciones_base(act: Actividad) -> Vec<Obligacion> {
             codigo: "111",
             nombre: "Retenciones de trabajo",
             plazo: "1–20 del mes siguiente a cada trimestre",
-            detalle: "Sólo si tienes empleados o pagas nóminas. AutónomoFACIL prepara un borrador con las nóminas generadas; revisa perceptores, brutos e IRPF.",
+            detalle: "Sólo si tienes empleados o pagas nóminas. AutónomoFácil prepara un borrador con las nóminas generadas; revisa perceptores, brutos e IRPF.",
             trimestral: true,
         },
         Obligacion {

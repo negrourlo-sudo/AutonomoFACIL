@@ -387,7 +387,7 @@ mod tests {
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join(".toolchain")
             .join("carga")
-            .join("AutonomoFACIL");
+            .join("AutonomoFacil");
         std::fs::create_dir_all(&dir).unwrap();
         db.ruta = dir.join("datos.json");
 
@@ -483,7 +483,7 @@ fn voz_si() -> bool {
 /// Carpeta de datos de la aplicación.
 pub fn dir_base() -> PathBuf {
     match std::env::var("APPDATA") {
-        Ok(base) if !base.is_empty() => PathBuf::from(base).join("AutonomoFACIL"),
+        Ok(base) if !base.is_empty() => PathBuf::from(base).join("AutonomoFacil"),
         _ => PathBuf::from("."),
     }
 }
@@ -528,7 +528,7 @@ fn migrar_si_hace_falta(destino: &Path) {
     }
 }
 
-/// `%APPDATA%\AutonomoFACIL\datos.json` en Windows; `./datos.json` en el resto.
+/// `%APPDATA%\AutonomoFacil\datos.json` en Windows; `./datos.json` en el resto.
 pub fn ruta_datos() -> PathBuf {
     let dir = dir_base();
     migrar_si_hace_falta(&dir);

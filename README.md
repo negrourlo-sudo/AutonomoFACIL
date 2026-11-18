@@ -1,4 +1,4 @@
-# AutónomoFACIL
+# AutónomoFácil
 
 Aplicación de escritorio en Rust para hacer **presupuestos y facturas** en España,
 con registro **Verifactu** encadenado, exportación **FacturaE 3.2.2** y un
@@ -7,22 +7,22 @@ módulo de **empleados y nóminas** para autónomos con trabajadores y sociedade
 Sin Electron, sin WebView, sin Node y sin toolchain de C: una ventana nativa
 (egui/eframe) y un ejecutable.
 
-Versión actual: **0.7.7**. La corrección de una factura emitida se hace con una
+Versión actual: **0.7.8**. La corrección de una factura emitida se hace con una
 **R1 por diferencias**; no se borra ni se anula la original.
 
-[![Última release](https://img.shields.io/github/v/release/negrourlo-sudo/AutonomoFACIL?label=release)](https://github.com/negrourlo-sudo/AutonomoFACIL/releases/latest)
+[![Última release](https://img.shields.io/github/v/release/negrourlo-sudo/AutonomoFacil?label=release)](https://github.com/negrourlo-sudo/AutonomoFacil/releases/latest)
 [![Licencia: CC BY-SA 4.0](https://img.shields.io/badge/licencia-CC%20BY--SA%204.0-lightgrey.svg)](LICENSE)
 
 ## Descargar
 
-La versión lista para usar está en **[Releases](https://github.com/negrourlo-sudo/AutonomoFACIL/releases/latest)**.
+La versión lista para usar está en **[Releases](https://github.com/negrourlo-sudo/AutonomoFacil/releases/latest)**.
 Es una aplicación nativa para **Windows de 64 bits** (Windows 10/11); no necesita
 runtime, Node, WebView ni permisos de administrador.
 
 | Fichero | Para qué |
 |---|---|
-| `AutonomoFACIL-0.7.7-Setup.exe` | Instalador por usuario. Crea los accesos y se puede desinstalar desde «Agregar o quitar programas». |
-| `AutonomoFACIL-0.7.7.exe` | Ejecutable portable. No instala nada; guarda los datos en `%APPDATA%\AutonomoFACIL`. |
+| `AutonomoFacil-0.7.8-Setup.exe` | Instalador por usuario. Crea los accesos y se puede desinstalar desde «Agregar o quitar programas». |
+| `AutonomoFacil-0.7.8.exe` | Ejecutable portable. No instala nada; guarda los datos en `%APPDATA%\AutonomoFacil`. |
 | `SHA256SUMS.txt` | Huellas SHA-256 de los dos ficheros anteriores. |
 
 El instalador y el ejecutable se publican **sin firma Authenticode**. Windows
@@ -30,11 +30,11 @@ puede mostrar «editor desconocido» o SmartScreen; es esperado. Antes de ejecut
 comprueba la descarga:
 
 ```powershell
-Get-FileHash .\AutonomoFACIL-0.7.7-Setup.exe -Algorithm SHA256
+Get-FileHash .\AutonomoFacil-0.7.8-Setup.exe -Algorithm SHA256
 ```
 
 El resultado debe coincidir con la línea correspondiente de `SHA256SUMS.txt`.
-Tus datos se guardan sólo en tu equipo, en `%APPDATA%\AutonomoFACIL`; al
+Tus datos se guardan sólo en tu equipo, en `%APPDATA%\AutonomoFacil`; al
 desinstalar se conservan salvo que marques la casilla para borrarlos.
 
 Para compilar desde el código, consulta [Cómo se ejecuta](#cómo-se-ejecuta).
@@ -382,7 +382,7 @@ sirve para revisarlo o pasárselo al gestor. Los recibos de diferencias se
 suman al periodo en el que se registran, con el signo de la corrección.
 
 **Límites importantes:** el cálculo usa **sólo las nóminas generadas en
-AutónomoFACIL**. No incluye facturas de profesionales con retención (casillas
+AutónomoFácil**. No incluye facturas de profesionales con retención (casillas
 07–09 del 111), retribuciones en especie, regularizaciones, atrasos, dietas ni
 otras rentas. Tampoco presenta nada en la AEAT: son borradores para revisar y
 teclear o importar en la Sede. Antes de presentar, comprueba que cada perceptor
@@ -436,8 +436,8 @@ export PATH="$PWD/.toolchain/mingw64/bin:$HOME/.cargo/bin:$PATH"
 cargo run --release
 ```
 
-Datos en `%APPDATA%\AutonomoFACIL\datos.json` (escritura atómica + `.bak`).
-Exportaciones organizadas en `%APPDATA%\AutonomoFACIL\export\<empresa>\`: `Facturas`, `Presupuestos` y `Proformas` guardan una subcarpeta por cliente (el PDF y el FacturaE del mismo documento van juntos); `Nominas`, una por empleado; y `Modelos` y `Contabilidad` guardan sus PDF, JSON, CSV o TXT directamente en su carpeta.
+Datos en `%APPDATA%\AutonomoFacil\datos.json` (escritura atómica + `.bak`).
+Exportaciones organizadas en `%APPDATA%\AutonomoFacil\export\<empresa>\`: `Facturas`, `Presupuestos` y `Proformas` guardan una subcarpeta por cliente (el PDF y el FacturaE del mismo documento van juntos); `Nominas`, una por empleado; y `Modelos` y `Contabilidad` guardan sus PDF, JSON, CSV o TXT directamente en su carpeta.
 
 Pruebas:
 
@@ -468,10 +468,10 @@ Deja en `dist/`:
 | Fichero | Qué es |
 |---|---|
 | `autonomofacil.exe` | La aplicación. Nativa, sin consola, sin runtime ni DLLs que instalar. |
-| `AutonomoFACIL-NSIS.exe` | El instalador. Asistente en español, **por usuario**: no pide administrador. |
+| `AutonomoFacil-NSIS.exe` | El instalador. Asistente en español, **por usuario**: no pide administrador. |
 
 Para publicar una release, renombra los artefactos a
-`AutonomoFACIL-<versión>-Setup.exe` y `AutonomoFACIL-<versión>.exe`, genera
+`AutonomoFacil-<versión>-Setup.exe` y `AutonomoFacil-<versión>.exe`, genera
 `SHA256SUMS.txt` y adjunta los tres a la release de GitHub. Las notas deben
 repetir la versión, la licencia y la nota de firma.
 
@@ -483,12 +483,12 @@ winget install --id NSIS.NSIS -e --accept-package-agreements --accept-source-agr
 
 ### Qué hace el instalador
 
-1. Comprueba que **AutónomoFACIL esté cerrado**. Si está abierto, pide cerrarlo
+1. Comprueba que **AutónomoFácil esté cerrado**. Si está abierto, pide cerrarlo
    y reintentar; en modo silencioso aborta en vez de tocar un ejecutable en uso.
 2. Si ya hay una instalación, guarda una **copia previa** del programa en
-   `%TEMP%\AutonomoFACIL-backup-<versión>`. Si falla la copia de ficheros,
+   `%TEMP%\AutonomoFacil-backup-<versión>`. Si falla la copia de ficheros,
    cancela antes de modificar nada.
-3. Copia la aplicación a `%LOCALAPPDATA%\Programs\AutonomoFACIL`.
+3. Copia la aplicación a `%LOCALAPPDATA%\Programs\AutonomoFacil`.
 4. Crea accesos directos en el menú Inicio y en el escritorio, usando el
    **icono incrustado en el .exe**; también deja `icono.ico` como respaldo.
 5. Se registra en **Agregar o quitar programas** de Windows (HKCU).
@@ -506,7 +506,7 @@ ya existían en una carpeta compartida, se guardan antes y se restauran; los
 demás ficheros de la carpeta no se modifican.
 
 **Tus datos no se borran por defecto al desinstalar**: quedan en
-`%APPDATA%\AutonomoFACIL`. El desinstalador permite borrarlos de forma opcional
+`%APPDATA%\AutonomoFacil`. El desinstalador permite borrarlos de forma opcional
 marcando esa casilla; si se marca, también elimina la carpeta antigua
 `%APPDATA%\Facturacion` y la eliminación es permanente. En una desinstalación
 silenciosa (`/S`) la página no se muestra y los datos se conservan.
@@ -514,7 +514,7 @@ silenciosa (`/S`) la página no se muestra y los datos se conservan.
 ### Firma Authenticode (opcional)
 
 El script firma `dist/autonomofacil.exe` **antes** de incrustarlo en el
-instalador y vuelve a firmar `dist/AutonomoFACIL-NSIS.exe` al final. Sin
+instalador y vuelve a firmar `dist/AutonomoFacil-NSIS.exe` al final. Sin
 certificado no falla: genera el paquete sin firmar y muestra un aviso. La firma
 es opcional para compilar, pero necesaria para distribuir sin el aviso de
 “editor desconocido”.
@@ -565,7 +565,7 @@ selecciona `/sha1`; una huella SHA-256 de 64 caracteres no vale.
 Si tu CA te entrega un PFX con clave privada exportable:
 
 ```bash
-export AUTONOMOFACIL_CERT_PFX="/ruta/segura/AutonomoFACIL.pfx"
+export AUTONOMOFACIL_CERT_PFX="/ruta/segura/AutonomoFacil.pfx"
 export AUTONOMOFACIL_CERT_PASSWORD="la-contraseña-del-pfx"
 bash empaquetar-nsis.sh
 ```
@@ -591,7 +591,7 @@ si el certificado está en token/HSM, usa la ruta A.
 2. Lo firma con el certificado elegido y comprueba la firma con
    `signtool verify /pa`.
 3. Compila el instalador NSIS con ese ejecutable ya firmado.
-4. Firma `dist/AutonomoFACIL-NSIS.exe` y vuelve a verificar.
+4. Firma `dist/AutonomoFacil-NSIS.exe` y vuelve a verificar.
 5. Muestra en pantalla el modo usado (almacén o PFX), pero nunca la contraseña.
 
 El orden importa: si firmas sólo el instalador, el `.exe` que lleva dentro
@@ -603,13 +603,13 @@ sin firmar.
 
 ```bash
 signtool verify /pa /v dist/autonomofacil.exe
-signtool verify /pa /v dist/AutonomoFACIL-NSIS.exe
+signtool verify /pa /v dist/AutonomoFacil-NSIS.exe
 ```
 
 O desde PowerShell:
 
 ```powershell
-Get-AuthenticodeSignature .\dist\AutonomoFACIL-NSIS.exe |
+Get-AuthenticodeSignature .\dist\AutonomoFacil-NSIS.exe |
   Format-List Status, StatusMessage, SignerCertificate, TimeStamperCertificate
 ```
 
@@ -811,7 +811,7 @@ cambia los fps. Se mantiene porque en máquinas con OpenGL por software
 - Calcula **IVA a ingresar** (modelo 303: repercutido − soportado) e **IRPF 130
   estimado** (20 % del rendimiento neto menos las retenciones practicadas).
 - **Libro de ingresos y gastos** exportable a CSV con `;` y BOM UTF-8 en
-  `%APPDATA%\AutonomoFACIL\export\<empresa>\Contabilidad\Libro-<año>-<empresa>.csv`.
+  `%APPDATA%\AutonomoFacil\export\<empresa>\Contabilidad\Libro-<año>-<empresa>.csv`.
 - Es una estimación informativa: no sustituye a la asesoría fiscal ni cubre
   compensaciones de trimestres anteriores, bienes de inversión o regímenes
   especiales.
@@ -841,7 +841,7 @@ cambia los fps. Se mantiene porque en máquinas con OpenGL por software
 En **Ajustes → Copias de seguridad**:
 
 - «Crear copia ahora» escribe `datos-<empresa>-AAAAMMDD-HHMMSS.json` en
-  `%APPDATA%\AutonomoFACIL\copias`.
+  `%APPDATA%\AutonomoFacil\copias`.
 - Se listan las últimas copias con un botón **Restaurar**, que pide
   confirmación y antes guarda una copia automática del estado actual.
 
@@ -885,7 +885,7 @@ como hechos sin configurar nada.
 - **Qué hay que presentar y cuándo**: los 303 y 130 de cada trimestre, el 390 y
 el 347, con la fecha límite.
 - **«Descargar resumen del año para el gestor»** escribe
-`%APPDATA%\AutonomoFACIL\export\<empresa>\Contabilidad\Informe-<año>-<empresa>.txt`
+`%APPDATA%\AutonomoFacil\export\<empresa>\Contabilidad\Informe-<año>-<empresa>.txt`
 con las cifras anuales, las de cada trimestre, el 347 y el 349, y lo abre junto
 a su carpeta.
 
@@ -1032,7 +1032,7 @@ En la guía, cada modelo que la app sabe calcular (**303, 130, 390, 347 y
 349**) tiene su botón **«Rellenar modelo»**. Los trimestrales (303, 130, 349)
 llevan además selector de periodo; los anuales (390, 347) se calculan del año
 entero. Genera dos ficheros en
-`%APPDATA%\AutonomoFACIL\export\<empresa>\Modelos\` y abre el PDF y su carpeta:
+`%APPDATA%\AutonomoFacil\export\<empresa>\Modelos\` y abre el PDF y su carpeta:
 
 - `Modelo-303-2026-1T-<empresa>.pdf`: las casillas del modelo con los importes
   ya calculados (devengado por tipo, deducible, resultado). Es un **borrador**
@@ -1169,7 +1169,7 @@ La aplicación arranca vacía: `Empresa::default()` nace sin nombre y
 `Db::default()` con clientes, documentos y gastos a cero. No hay ninguna
 empresa sembrada, así que el asistente te pregunta lo tuyo desde el principio.
 
-Los datos viven en `%APPDATA%\AutonomoFACIL\datos.json`; **reinstalar no los
+Los datos viven en `%APPDATA%\AutonomoFacil\datos.json`; **reinstalar no los
 borra** y desinstalar tampoco los elimina por defecto. Es lo que quieres para no
 perder facturas al actualizar. Si alguna vez
 quieres volver a empezar como el primer día, cierra la aplicación y aparta ese
@@ -1259,7 +1259,7 @@ propio).
 En **Ajustes → Logo de la empresa** se elige una imagen con el diálogo de
 Windows. Cualquier formato vale (PNG, JPG, BMP, GIF): se convierte a JPEG sobre
 fondo blanco, con 900 px de lado como máximo, y se guarda en
-`%APPDATA%\AutonomoFACIL\logo.jpg`.
+`%APPDATA%\AutonomoFacil\logo.jpg`.
 
 El logo sale arriba a la izquierda en la cabecera de facturas, presupuestos y
 proformas, en todas las páginas, y el bloque de datos de la empresa se aparta a
@@ -1436,9 +1436,9 @@ teniendo su calendario y su explicación en la guía.
 
 [![CC BY-SA 4.0](https://licensebuttons.net/l/by-sa/4.0/88x31.png)](https://creativecommons.org/licenses/by-sa/4.0/)
 
-El código y los contenidos propios de **AutónomoFACIL** están bajo la licencia
+El código y los contenidos propios de **AutónomoFácil** están bajo la licencia
 [Creative Commons Atribución-CompartirIgual 4.0 Internacional (CC BY-SA 4.0)](https://creativecommons.org/licenses/by-sa/4.0/).
-© 2026 FranciscoNicolás. Algunos derechos reservados.
+AutónomoFácil © 2026 de Francisco Nicolás está bajo la licencia CC BY-SA 4.0. Para ver una copia de esta licencia, visite https://creativecommons.org/licenses/by-sa/4.0/
 
 Puedes copiar, redistribuir y adaptar el material, incluso comercialmente,
 siempre que cites la autoría, enlaces a la licencia e indiques si hay cambios;

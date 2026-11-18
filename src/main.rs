@@ -1,6 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-//! AutónomoFACIL: presupuestos, facturas y nóminas para España.
+//! AutónomoFácil: presupuestos, facturas y nóminas para España.
 //!
 //! · Dinero en céntimos (`i64`), nunca coma flotante.
 //! · Registro Verifactu con huella SHA-256 encadenada y QR de la AEAT.
@@ -46,7 +46,8 @@ fn main() -> eframe::Result {
             .with_inner_size([1260.0, 820.0])
             .with_min_inner_size([820.0, 540.0])
             .with_title(format!(
-                "AutónomoFACIL {} — presupuestos, facturas y nóminas",
+                "{} {} — presupuestos, facturas y nóminas",
+                version::PRODUCTO,
                 version::VERSION
             )),
         ..Default::default()

@@ -1,8 +1,8 @@
 [package]
 name = "autonomofacil"
-version = "0.7.7"
+version = "0.7.8"
 edition = "2021"
-description = "Presupuestos y facturas para España: Verifactu, rectificativas R1, FacturaE 3.2.2 y nóminas"
+description = "AutónomoFácil: presupuestos, facturas, nóminas y modelos fiscales para autónomos en España"
 license = "CC-BY-SA-4.0"
 
 [dependencies]

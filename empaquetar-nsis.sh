@@ -74,7 +74,7 @@ firmar() {
       /p "$AUTONOMOFACIL_CERT_PASSWORD" \
       /tr "$AUTONOMOFACIL_TIMESTAMP_URL" \
       /td SHA256 \
-      /d "AutónomoFACIL" \
+      /d "AutónomoFácil" \
       "$archivo"
   else
     if [ "$CERT_STORE" = "maquina" ]; then
@@ -86,7 +86,7 @@ firmar() {
       /fd SHA256 \
       /tr "$AUTONOMOFACIL_TIMESTAMP_URL" \
       /td SHA256 \
-      /d "AutónomoFACIL" \
+      /d "AutónomoFácil" \
       "$archivo"
   fi
   "$SIGNTOOL" verify /pa "$archivo" >/dev/null
@@ -205,13 +205,13 @@ echo "      version $VER (fichero: $VER4)"
 
 echo "[5/6] firma del instalador"
 if [ "$FIRMAR" -eq 1 ]; then
-  firmar "dist/AutonomoFACIL-NSIS.exe"
+  firmar "dist/AutonomoFacil-NSIS.exe"
 else
   echo "      omitida: no hay certificado configurado"
 fi
 
 echo "[6/6] resultado"
-ls -lh dist/autonomofacil.exe dist/AutonomoFACIL-NSIS.exe
+ls -lh dist/autonomofacil.exe dist/AutonomoFacil-NSIS.exe
 echo
 if [ "$FIRMAR" -eq 1 ]; then
   if [ "$MODO_FIRMA" = "store" ]; then
@@ -220,8 +220,8 @@ if [ "$FIRMAR" -eq 1 ]; then
     echo "Paquete firmado con PFX."
   fi
   echo "Verifica la firma antes de distribuir:"
-  echo "  signtool verify /pa /v dist/AutonomoFACIL-NSIS.exe"
+  echo "  signtool verify /pa /v dist/AutonomoFacil-NSIS.exe"
 else
   echo "Paquete generado SIN firma Authenticode: Windows SmartScreen puede avisar."
-  echo "Instalar:  dist/AutonomoFACIL-NSIS.exe"
+  echo "Instalar:  dist/AutonomoFacil-NSIS.exe"
 fi

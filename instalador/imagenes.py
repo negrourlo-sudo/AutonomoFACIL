@@ -65,6 +65,7 @@ FUENTE = {
     "/": ["....#", "...#.", "...#.", "..#..", ".#...", ".#...", "#...."],
     "+": [".....", "..#..", "..#..", "#####", "..#..", "..#..", "....."],
     "Ñ": [".###.", "#...#", "##..#", "#.#.#", "#..##", "#...#", "#...#"],
+    "Á": ["..##.", ".##..", "#...#", "#####", "#...#", "#...#", "#...#"],
     "Ó": ["..##.", ".##..", "#...#", "#...#", "#...#", "#...#", ".###."],
 }
 
@@ -259,7 +260,7 @@ def panel_asistente(ruta):
     """164x314: el panel izquierdo del asistente."""
     l = Lienzo(164, 314)
     l.logo(40, 34, 84)
-    l.texto_centrado(146, "AUTÓNOMOFACIL", 2, PIZARRA)
+    l.texto_centrado(146, "AUTÓNOMOFÁCIL", 2, PIZARRA)
     l.rect(62, 168, 40, 3, INDIGO)
     l.texto_centrado(184, "FACTURAS · PRESUPUESTOS", 1, GRIS)
     l.texto_centrado(200, "VERIFACTU + FACTURAE 3.2.2", 1, GRIS)
@@ -272,7 +273,7 @@ def cabecera(ruta):
     """150x57: cabecera de las páginas interiores."""
     l = Lienzo(150, 57)
     l.logo(9, 8, 41)
-    l.texto(58, 15, "AUTÓNOMOFACIL", 1, PIZARRA)
+    l.texto(58, 15, "AUTÓNOMOFÁCIL", 1, PIZARRA)
     l.texto(58, 26, version_app(), 1, GRIS)
     l.texto(58, 37, "ESPAÑA", 1, GRIS)
     l.rect(0, 53, 150, 4, INDIGO)

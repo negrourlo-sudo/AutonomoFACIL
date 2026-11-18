@@ -873,7 +873,7 @@ pub fn nomina(n: &Nomina, e: &Empleado, empresa: &Empresa) -> Vec<u8> {
         7.0,
         false,
         0.55,
-        "Resumen orientativo generado por AutónomoFACIL. No sustituye el recibo oficial de salarios ni el boletín de cotización.",
+        "Resumen orientativo generado por AutónomoFácil. No sustituye el recibo oficial de salarios ni el boletín de cotización.",
     );
     if let Some(paquete) = &n.paquete {
         p.texto(
@@ -1235,7 +1235,7 @@ pub fn modelo(m: &crate::modelos::Modelo, empresa: &Empresa) -> Vec<u8> {
             7.0,
             false,
             0.55,
-            &format!("AutónomoFACIL · página {} de {}", i + 1, total),
+            &format!("AutónomoFácil · página {} de {}", i + 1, total),
         );
 
         paginas.push(p.ops);
