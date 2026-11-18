@@ -93,6 +93,28 @@ pub fn nombre_fichero(doc: &Documento) -> String {
     format!("facturae-{serie}-{:04}-{cliente}.xml", doc.numero)
 }
 
+/// Cuota de IVA de cada línea, calculada sobre la base acumulada de su tipo.
+/// La suma de las cuotas coincide exactamente con la cuota agrupada de
+/// `Documento::totales()`; no hace falta repartir diferencias después.
+fn cuotas_iva_lineas(doc: &Documento) -> Vec<i64> {
+    if !doc.operacion.lleva_iva() {
+        return vec![0; doc.lineas.len()];
+    }
+
+    let mut acumulado: BTreeMap<i32, (i64, i64)> = BTreeMap::new();
+    doc.lineas
+        .iter()
+        .map(|l| {
+            let (base, cuota_previa) = acumulado.entry(l.iva_pb).or_insert((0, 0));
+            *base += Documento::calc_linea(l).importe;
+            let cuota_acumulada = div_round(*base * l.iva_pb as i64, 10_000);
+            let cuota_linea = cuota_acumulada - *cuota_previa;
+            *cuota_previa = cuota_acumulada;
+            cuota_linea
+        })
+        .collect()
+}
+
 pub fn generar(doc: &Documento, empresa: &Empresa) -> String {
     let t = doc.totales();
     let mut x = String::with_capacity(4096);
@@ -338,36 +360,7 @@ pub fn generar(doc: &Documento, empresa: &Empresa) -> String {
     ));
     x.push_str("      </InvoiceTotals>\n");
 
-    // Las cuotas de línea se calculan por separado y se ajusta la diferencia
-    // de redondeo dentro de cada tipo. Así su suma coincide exactamente con
-    // el <TaxAmount> agrupado de TaxesOutputs y con TotalTaxOutputs.
-    let mut cuotas_linea = Vec::with_capacity(doc.lineas.len());
-    let mut suma_por_tipo: BTreeMap<i32, i64> = BTreeMap::new();
-    for l in &doc.lineas {
-        let lc = Documento::calc_linea(l);
-        let cuota = if doc.operacion.lleva_iva() {
-            div_round(lc.importe * l.iva_pb as i64, 10_000)
-        } else {
-            0
-        };
-        cuotas_linea.push(cuota);
-        *suma_por_tipo.entry(l.iva_pb).or_insert(0) += cuota;
-    }
-    for (tipo, _, objetivo) in &t.bases {
-        let diferencia = *objetivo - suma_por_tipo.get(tipo).copied().unwrap_or(0);
-        if diferencia != 0 {
-            if let Some(pos) = doc
-                .lineas
-                .iter()
-                .enumerate()
-                .filter(|(_, l)| l.iva_pb == *tipo)
-                .max_by_key(|(_, l)| Documento::calc_linea(l).importe.abs())
-                .map(|(i, _)| i)
-            {
-                cuotas_linea[pos] += diferencia;
-            }
-        }
-    }
+    let cuotas_linea = cuotas_iva_lineas(doc);
 
     x.push_str("      <Items>\n");
     for (l, cuota) in doc.lineas.iter().zip(&cuotas_linea) {
@@ -533,7 +526,7 @@ mod tests {
         }
     }
 
-    fn suma_cuotas_de_lineas(xml: &str) -> i64 {
+    fn cuotas_de_lineas(xml: &str) -> Vec<i64> {
         let items = xml
             .split("<Items>")
             .nth(1)
@@ -542,13 +535,45 @@ mod tests {
             .next()
             .unwrap();
         let etiqueta = "<TaxAmount><TotalAmount>";
-        let mut suma = 0;
+        let mut cuotas = Vec::new();
         for (inicio, _) in items.match_indices(etiqueta) {
             let desde = inicio + etiqueta.len();
             let hasta = desde + items[desde..].find("</TotalAmount>").unwrap();
-            suma += crate::model::parse_cents(&items[desde..hasta]).unwrap();
+            cuotas.push(crate::model::parse_cents(&items[desde..hasta]).unwrap());
         }
-        suma
+        cuotas
+    }
+
+    fn entre<'a>(texto: &'a str, inicio: &str, fin: &str) -> &'a str {
+        let desde = texto.find(inicio).unwrap() + inicio.len();
+        let hasta = desde + texto[desde..].find(fin).unwrap();
+        &texto[desde..hasta]
+    }
+
+    fn lineas_del_xml(xml: &str) -> Vec<(i32, i64)> {
+        let items = xml
+            .split("<Items>")
+            .nth(1)
+            .unwrap()
+            .split("</Items>")
+            .next()
+            .unwrap();
+        items
+            .split("<InvoiceLine>")
+            .skip(1)
+            .map(|linea| {
+                let tipo = entre(linea, "<TaxRate>", "</TaxRate>");
+                let cuota = entre(
+                    linea,
+                    "<TaxAmount><TotalAmount>",
+                    "</TotalAmount>",
+                );
+                (
+                    crate::model::parse_cents(tipo).unwrap() as i32,
+                    crate::model::parse_cents(cuota).unwrap(),
+                )
+            })
+            .collect()
     }
 
     #[test]
@@ -568,7 +593,73 @@ mod tests {
         let xml = generar(&d, &e);
         assert_eq!(d.totales().cuota_iva, 1);
         assert!(xml.contains("<TotalTaxOutputs>0.01</TotalTaxOutputs>"));
-        assert_eq!(suma_cuotas_de_lineas(&xml), d.totales().cuota_iva);
+        let cuotas = cuotas_de_lineas(&xml);
+        assert_eq!(cuotas.iter().sum::<i64>(), d.totales().cuota_iva);
+    }
+
+    #[test]
+    fn las_cuotas_de_las_lineas_no_quedan_negativas() {
+        let (mut d, e) = ejemplo();
+        // Cinco líneas de 3 céntimos: cada cuota individual redondea a uno,
+        // pero la cuota agrupada al 21 % es 3 céntimos. El ajuste debe
+        // repartirse sin dejar ninguna cuota en negativo.
+        d.lineas = (0..5)
+            .map(|i| Linea {
+                descripcion: format!("Línea {i}"),
+                cantidad_milli: 1000,
+                precio_cents: 3,
+                iva_pb: 2100,
+                ..Default::default()
+            })
+            .collect();
+        let xml = generar(&d, &e);
+        assert_eq!(d.totales().cuota_iva, 3);
+        assert!(xml.contains("<TotalTaxOutputs>0.03</TotalTaxOutputs>"));
+        let cuotas = cuotas_de_lineas(&xml);
+        assert_eq!(cuotas.iter().sum::<i64>(), 3, "{cuotas:?}");
+        assert!(cuotas.iter().all(|&cuota| cuota >= 0), "{cuotas:?}");
+        assert!(
+            cuotas.iter().filter(|&&cuota| cuota > 0).count() >= 2,
+            "el ajuste no debe acumularse en una sola línea: {cuotas:?}"
+        );
+    }
+
+    #[test]
+    fn dos_tipos_intercalados_suman_su_cuota_por_grupo() {
+        let (mut d, e) = ejemplo();
+        // Cinco líneas de 3 céntimos al 21 % y cinco al 10 %, alternadas.
+        // El 21 % agrupa 3 céntimos aunque sus líneas sumen 5; el 10 % agrupa
+        // 2 aunque sus líneas redondeen a cero.
+        d.lineas = (0..10)
+            .map(|i| Linea {
+                descripcion: format!("Línea {i}"),
+                cantidad_milli: 1000,
+                precio_cents: 3,
+                iva_pb: if i % 2 == 0 { 2100 } else { 1000 },
+                ..Default::default()
+            })
+            .collect();
+
+        let xml = generar(&d, &e);
+        assert!(xml.contains("<TotalTaxOutputs>0.05</TotalTaxOutputs>"));
+
+        let lineas = lineas_del_xml(&xml);
+        assert_eq!(
+            lineas.iter().map(|(tipo, _)| *tipo).collect::<Vec<_>>(),
+            (0..10)
+                .map(|i| if i % 2 == 0 { 2100 } else { 1000 })
+                .collect::<Vec<_>>()
+        );
+
+        for (tipo, _, cuota_agrupada) in &d.totales().bases {
+            let suma: i64 = lineas
+                .iter()
+                .filter(|(linea_tipo, _)| linea_tipo == tipo)
+                .map(|(_, cuota)| *cuota)
+                .sum();
+            assert_eq!(suma, *cuota_agrupada, "tipo {tipo}");
+        }
+        assert!(lineas.iter().all(|(_, cuota)| *cuota >= 0), "{lineas:?}");
     }
 
     #[test]

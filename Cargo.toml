@@ -1,6 +1,6 @@
 [package]
 name = "autonomofacil"
-version = "0.7.9"
+version = "0.7.10"
 edition = "2021"
 description = "AutónomoFácil: presupuestos, facturas, nóminas y modelos fiscales para autónomos en España"
 license = "CC-BY-SA-4.0"

@@ -7,7 +7,7 @@ módulo de **empleados y nóminas** para autónomos con trabajadores y sociedade
 Sin Electron, sin WebView, sin Node y sin toolchain de C: una ventana nativa
 (egui/eframe) y un ejecutable.
 
-Versión actual: **0.7.9**. La corrección de una factura emitida se hace con una
+Versión actual: **0.7.10**. La corrección de una factura emitida se hace con una
 **R1 por diferencias**; no se borra ni se anula la original.
 
 [![Última release](https://img.shields.io/github/v/release/negrourlo-sudo/AutonomoFacil?label=release)](https://github.com/negrourlo-sudo/AutonomoFacil/releases/latest)
@@ -21,24 +21,27 @@ runtime, Node, WebView ni permisos de administrador.
 
 | Fichero | Para qué |
 |---|---|
-| `AutonomoFacil-0.7.9-Setup.exe` | Instalador por usuario. Crea los accesos y se puede desinstalar desde «Agregar o quitar programas». |
-| `AutonomoFacil-0.7.9.exe` | Ejecutable portable. No instala nada; guarda los datos en `%APPDATA%\AutonomoFacil`. |
+| `AutonomoFacil-0.7.10-Setup.exe` | Instalador por usuario. Crea los accesos y se puede desinstalar desde «Agregar o quitar programas». |
+| `AutonomoFacil-0.7.10.exe` | Ejecutable portable. No instala nada; guarda los datos en `%APPDATA%\AutonomoFacil`. |
 | `SHA256SUMS.txt` | Huellas SHA-256 de los dos ficheros anteriores. |
 
-### Novedades de la 0.7.9
+### Novedades de la 0.7.10
 
-- Las cantidades admiten y conservan **tres decimales** al editar, guardar y
-  exportar: `1,255 h` ya no se convierte en `1,250 h`.
-- El IVA de las líneas del XML **FacturaE** se ajusta al céntimo para que su
-  suma coincida con `TotalTaxOutputs`, incluso con muchas líneas pequeñas al
-  mismo tipo. El ajuste se aplica dentro de cada tipo de IVA.
+- El IVA de las líneas del XML **FacturaE** se calcula con redondeo acumulado
+  por tipo: la suma de cada grupo coincide exactamente con su cuota agrupada.
+- El reparto ya no puede dejar una línea con **IVA negativo**, aunque la suma
+  de los redondeos individuales supere el total del grupo.
+- Funciona también cuando hay **varios tipos de IVA intercalados** (por
+  ejemplo, líneas al 21 % y al 10 % alternadas).
+- Se mantienen las cantidades con **tres decimales** de la 0.7.9: `1,255 h`
+  no se convierte en `1,250 h`.
 
 El instalador y el ejecutable se publican **sin firma Authenticode**. Windows
 puede mostrar «editor desconocido» o SmartScreen; es esperado. Antes de ejecutar,
 comprueba la descarga:
 
 ```powershell
-Get-FileHash .\AutonomoFacil-0.7.9-Setup.exe -Algorithm SHA256
+Get-FileHash .\AutonomoFacil-0.7.10-Setup.exe -Algorithm SHA256
 ```
 
 El resultado debe coincidir con la línea correspondiente de `SHA256SUMS.txt`.
@@ -688,8 +691,8 @@ Decisiones que conviene conocer:
 
 - **Dinero en `i64` de céntimos.** Nunca `f64`. Las cantidades van en
   milésimas, así que 1,255 h y 0,5 ud son exactas. El redondeo es al céntimo
-  más cercano; en FacturaE se calcula la cuota agrupada por tipo de IVA y se
-  reparte la diferencia entre sus líneas para que el XML cuadre.
+  más cercano; en FacturaE se usa el redondeo acumulado por tipo de IVA, de
+  modo que cada grupo de líneas suma exactamente su cuota agrupada.
 - **Un solo fichero JSON en vez de SQLite.** Evita una dependencia con
   compilador de C y hace los datos inspeccionables y copiables. Para miles de
   facturas es de sobra; el modelo está separado para migrar a SQL sin tocar la

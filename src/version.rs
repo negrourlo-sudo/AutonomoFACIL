@@ -1,6 +1,6 @@
 //! Versión de la aplicación.
 //!
-//! Cargo exige semver de tres componentes, así que el paquete declara `0.7.9`.
+//! Cargo exige semver de tres componentes, así que el paquete declara `0.7.10`.
 //! La versión visible (título de la ventana, "Agregar o quitar programas" y el
 //! instalador) es la de aquí, con cuatro campos como pide Windows.
 //!
@@ -8,4 +8,4 @@
 //! se la pasa a `makensis`, así que no hay números repetidos por el proyecto.
 
 pub const PRODUCTO: &str = "AutónomoFácil";
-pub const VERSION: &str = "0.7.9.0";
+pub const VERSION: &str = "0.7.10.0";
