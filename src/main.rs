@@ -12,6 +12,7 @@ mod empleados;
 mod export;
 mod fiscal;
 mod graficas;
+mod licencia;
 mod logo;
 mod modelos;
 mod nomina_paquetes;

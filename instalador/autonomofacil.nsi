@@ -32,11 +32,11 @@ Unicode true
 ; La versión llega desde `empaquetar-nsis.sh` (que la lee de src/version.rs).
 ; Si se compila a mano, aquí queda el valor por defecto.
 !ifndef APP_VERSION
-!define APP_VERSION "0.1.0.1"
+!define APP_VERSION "0.7.7.0"
 !endif
 ; Windows quiere cuatro números en la versión del fichero.
 !ifndef APP_VERSION4
-!define APP_VERSION4 "0.1.0.1"
+!define APP_VERSION4 "0.7.7.0"
 !endif
 !define APP_KEY     "AutonomoFACIL"
 !define ORIGEN      "..\dist"
@@ -94,8 +94,8 @@ Verifactu encadenado, código QR y exportación FacturaE 3.2.2.$\r$\n$\r$\n\
 Se instala solo para tu usuario: no hace falta administrador y no se toca \
 ningún archivo del sistema.$\r$\n$\r$\nPulsa Siguiente para continuar."
 
-!define MUI_LICENSEPAGE_TEXT_TOP  "Lee esto antes de continuar: es lo que el programa hace y, sobre todo, lo que no hace."
-!define MUI_LICENSEPAGE_TEXT_BOTTOM "Si necesitas un sistema conforme al RD 1007/2023, este programa todavía no lo es por sí solo."
+!define MUI_LICENSEPAGE_TEXT_TOP  "Lee el aviso legal y la licencia antes de continuar."
+!define MUI_LICENSEPAGE_TEXT_BOTTOM "Código y contenidos propios bajo CC BY-SA 4.0. Si necesitas un sistema conforme al RD 1007/2023, este programa todavía no lo es por sí solo."
 
 !define MUI_DIRECTORYPAGE_TEXT_TOP "Elige dónde instalar ${APP_NAME}. Por defecto va en tu carpeta de usuario, sin permisos especiales."
 

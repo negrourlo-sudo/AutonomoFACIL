@@ -7,8 +7,37 @@ módulo de **empleados y nóminas** para autónomos con trabajadores y sociedade
 Sin Electron, sin WebView, sin Node y sin toolchain de C: una ventana nativa
 (egui/eframe) y un ejecutable.
 
-Versión actual: **0.7.6**. La corrección de una factura emitida se hace con una
+Versión actual: **0.7.7**. La corrección de una factura emitida se hace con una
 **R1 por diferencias**; no se borra ni se anula la original.
+
+[![Última release](https://img.shields.io/github/v/release/negrourlo-sudo/AutonomoFACIL?label=release)](https://github.com/negrourlo-sudo/AutonomoFACIL/releases/latest)
+[![Licencia: CC BY-SA 4.0](https://img.shields.io/badge/licencia-CC%20BY--SA%204.0-lightgrey.svg)](LICENSE)
+
+## Descargar
+
+La versión lista para usar está en **[Releases](https://github.com/negrourlo-sudo/AutonomoFACIL/releases/latest)**.
+Es una aplicación nativa para **Windows de 64 bits** (Windows 10/11); no necesita
+runtime, Node, WebView ni permisos de administrador.
+
+| Fichero | Para qué |
+|---|---|
+| `AutonomoFACIL-0.7.7-Setup.exe` | Instalador por usuario. Crea los accesos y se puede desinstalar desde «Agregar o quitar programas». |
+| `AutonomoFACIL-0.7.7.exe` | Ejecutable portable. No instala nada; guarda los datos en `%APPDATA%\AutonomoFACIL`. |
+| `SHA256SUMS.txt` | Huellas SHA-256 de los dos ficheros anteriores. |
+
+El instalador y el ejecutable se publican **sin firma Authenticode**. Windows
+puede mostrar «editor desconocido» o SmartScreen; es esperado. Antes de ejecutar,
+comprueba la descarga:
+
+```powershell
+Get-FileHash .\AutonomoFACIL-0.7.7-Setup.exe -Algorithm SHA256
+```
+
+El resultado debe coincidir con la línea correspondiente de `SHA256SUMS.txt`.
+Tus datos se guardan sólo en tu equipo, en `%APPDATA%\AutonomoFACIL`; al
+desinstalar se conservan salvo que marques la casilla para borrarlos.
+
+Para compilar desde el código, consulta [Cómo se ejecuta](#cómo-se-ejecuta).
 
 ---
 
@@ -24,7 +53,7 @@ Versión actual: **0.7.6**. La corrección de una factura emitida se hace con un
 | Firma XAdES del FacturaE | **No implementado** |
 | Validación contra el XSD oficial | **No hecha** (ver *Límites*) |
 
-### Plazos vigentes (a 12 de noviembre de 2026)
+### Plazos vigentes (a 18 de noviembre de 2026)
 
 Esto cambia, compruébalo antes de fiarte:
 
@@ -441,6 +470,11 @@ Deja en `dist/`:
 | `autonomofacil.exe` | La aplicación. Nativa, sin consola, sin runtime ni DLLs que instalar. |
 | `AutonomoFACIL-NSIS.exe` | El instalador. Asistente en español, **por usuario**: no pide administrador. |
 
+Para publicar una release, renombra los artefactos a
+`AutonomoFACIL-<versión>-Setup.exe` y `AutonomoFACIL-<versión>.exe`, genera
+`SHA256SUMS.txt` y adjunta los tres a la release de GitHub. Las notas deben
+repetir la versión, la licencia y la nota de firma.
+
 Hacen falta NSIS 3 y Python 3:
 
 ```bash
@@ -464,7 +498,7 @@ winget install --id NSIS.NSIS -e --accept-package-agreements --accept-source-agr
    creado. Los datos de `%APPDATA%` no se tocan.
 8. Al desinstalar, muestra una casilla **sin marcar** para borrar también datos,
    exportaciones, nóminas, copias y la carpeta antigua `Facturacion` si existe.
-9. Muestra la licencia antes de instalar.
+9. Muestra el aviso legal y la licencia CC BY-SA 4.0 antes de instalar.
 
 El instalador no borra la carpeta elegida con `RMDir /r`: en el rollback sólo se
 tocan los tres ficheros de la aplicación (ejecutable, icono y desinstalador). Si
@@ -1397,3 +1431,18 @@ teniendo su calendario y su explicación en la guía.
   `Ctrl` + rueda y `Ctrl` + `+` / `Ctrl` + `−` que ya interpreta egui. Se
   limita al 60-200 % y se guarda en `datos.json` (`"zoom": 1.0`), así que se
   recuerda al volver a abrir.
+
+## Licencia
+
+[![CC BY-SA 4.0](https://licensebuttons.net/l/by-sa/4.0/88x31.png)](https://creativecommons.org/licenses/by-sa/4.0/)
+
+El código y los contenidos propios de **AutónomoFACIL** están bajo la licencia
+[Creative Commons Atribución-CompartirIgual 4.0 Internacional (CC BY-SA 4.0)](https://creativecommons.org/licenses/by-sa/4.0/).
+© 2026 FranciscoNicolás. Algunos derechos reservados.
+
+Puedes copiar, redistribuir y adaptar el material, incluso comercialmente,
+siempre que cites la autoría, enlaces a la licencia e indiques si hay cambios;
+las adaptaciones deben compartirse bajo la misma licencia.
+
+Las dependencias de terceros conservan sus propias licencias. El texto legal
+está en [creativecommons.org](https://creativecommons.org/licenses/by-sa/4.0/legalcode.es).

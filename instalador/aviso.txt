@@ -38,3 +38,16 @@ INSTALACION
 
 Se instala solo para tu usuario, en %LOCALAPPDATA%\Programs\AutonomoFACIL.
 No necesita permisos de administrador y no modifica archivos del sistema.
+
+
+LICENCIA
+
+El codigo y los contenidos propios de AutonomoFACIL estan bajo la licencia
+Creative Commons Atribucion-CompartirIgual 4.0 Internacional (CC BY-SA 4.0).
+Puedes copiarlos, redistribuirlos y adaptarlos, incluso comercialmente, si
+citas la autoria y compartes las adaptaciones bajo la misma licencia.
+
+Texto legal: https://creativecommons.org/licenses/by-sa/4.0/legalcode.es
+Resumen:     https://creativecommons.org/licenses/by-sa/4.0/deed.es
+
+(C) 2026 FranciscoNicolas. Las dependencias de terceros conservan sus licencias.

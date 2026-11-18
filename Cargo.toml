@@ -1,8 +1,9 @@
 [package]
 name = "autonomofacil"
-version = "0.7.6"
+version = "0.7.7"
 edition = "2021"
 description = "Presupuestos y facturas para España: Verifactu, rectificativas R1, FacturaE 3.2.2 y nóminas"
+license = "CC-BY-SA-4.0"
 
 [dependencies]
 # GUI de escritorio, renderer OpenGL (glow). Sin WebView, sin Node.

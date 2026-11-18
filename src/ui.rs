@@ -8,7 +8,7 @@ use crate::empleados::*;
 use crate::model::*;
 use crate::perf::{Benchmark, Perfil};
 use crate::store::Db;
-use crate::{export, facturae, pdf, tema, verifactu};
+use crate::{export, facturae, licencia, pdf, tema, verifactu};
 use chrono::{Datelike, Local, NaiveDate};
 // `egui` llega reexportado por eframe: no es una dependencia directa.
 use eframe::egui;
@@ -66,12 +66,84 @@ enum AccionConfirmada {
     QuitarAjustesModelo(String),
 }
 
+/// Tipo de ficha que se está editando.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum FichaTipo {
+    Cliente,
+    Empleado,
+    Articulo,
+}
+
+/// Ficha que se abrirá cuando se resuelva el aviso de cambios sin guardar.
+#[derive(Clone)]
+enum FichaDestino {
+    Cliente { cliente: Cliente, nuevo: bool },
+    Empleado { empleado: Empleado, nuevo: bool },
+    Articulo { articulo: Articulo, nuevo: bool },
+}
+
+impl FichaDestino {
+    fn tipo(&self) -> FichaTipo {
+        match self {
+            FichaDestino::Cliente { .. } => FichaTipo::Cliente,
+            FichaDestino::Empleado { .. } => FichaTipo::Empleado,
+            FichaDestino::Articulo { .. } => FichaTipo::Articulo,
+        }
+    }
+
+    fn id(&self) -> u64 {
+        match self {
+            FichaDestino::Cliente { cliente, .. } => cliente.id,
+            FichaDestino::Empleado { empleado, .. } => empleado.id,
+            FichaDestino::Articulo { articulo, .. } => articulo.id,
+        }
+    }
+
+    fn es_nuevo(&self) -> bool {
+        match self {
+            FichaDestino::Cliente { nuevo, .. }
+            | FichaDestino::Empleado { nuevo, .. }
+            | FichaDestino::Articulo { nuevo, .. } => *nuevo,
+        }
+    }
+}
+
 #[derive(Clone)]
 struct Confirmacion {
     titulo: String,
     mensaje: String,
     etiqueta: &'static str,
     accion: AccionConfirmada,
+}
+
+/// Marco de los diálogos: el mismo de las ventanas, con margen interior para
+/// que el texto y los botones no toquen el borde.
+fn marco_dialogo(ctx: &egui::Context) -> egui::Frame {
+    egui::Frame::window(&ctx.style()).inner_margin(egui::Margin::symmetric(18.0, 14.0))
+}
+
+/// Velo de los diálogos con decisión pendiente. Va en la capa Middle: tapa los
+/// paneles del fondo y captura clics y rueda, pero deja el diálogo en
+/// Foreground por encima. Sin él, se podía navegar y editar por detrás.
+fn velo_modal(ctx: &egui::Context) {
+    let pantalla = ctx.screen_rect();
+    let capa = egui::LayerId::new(egui::Order::Middle, egui::Id::new("velo_modal"));
+    egui::Area::new(capa.id)
+        .order(egui::Order::Middle)
+        .fixed_pos(pantalla.min)
+        .interactable(true)
+        .show(ctx, |ui| {
+            let (rect, _) = ui.allocate_exact_size(pantalla.size(), egui::Sense::click());
+            ui.painter().rect_filled(
+                rect,
+                egui::Rounding::ZERO,
+                egui::Color32::from_black_alpha(90),
+            );
+        });
+    // Las ventanas de trabajo son Areas en Middle. Subir el velo dentro de su
+    // capa lo deja por encima de todas ellas; los diálogos van en Foreground y
+    // siguen siendo lo único interactivo.
+    ctx.move_to_top(capa);
 }
 
 struct LineaBuf {
@@ -128,11 +200,13 @@ struct EmpleadoBuf {
     baja: String,
     salario: String,
     irpf: String,
+    /// Huella de cómo estaba al abrirlo: detecta cambios sin guardar.
+    firma_inicial: String,
 }
 
 impl EmpleadoBuf {
     fn desde(empleado: Empleado) -> Self {
-        Self {
+        let mut buf = Self {
             alta: empleado.fecha_alta.format("%d/%m/%Y").to_string(),
             baja: empleado
                 .fecha_baja
@@ -141,17 +215,36 @@ impl EmpleadoBuf {
             salario: fmt_cents(empleado.salario_bruto_anual_cents),
             irpf: fmt_pb(empleado.irpf_pb),
             empleado,
-        }
+            firma_inicial: String::new(),
+        };
+        buf.firma_inicial = buf.firma();
+        buf
     }
 
     fn nuevo(empleado: Empleado) -> Self {
-        Self {
+        let mut buf = Self {
             alta: empleado.fecha_alta.format("%d/%m/%Y").to_string(),
             baja: String::new(),
             salario: String::new(),
             irpf: fmt_pb(empleado.irpf_pb),
             empleado,
-        }
+            firma_inicial: String::new(),
+        };
+        buf.firma_inicial = buf.firma();
+        buf
+    }
+
+    /// Incluye los textos tal como se teclean, no sólo los números ya
+    /// convertidos: una fecha o un importe a medias también cuenta.
+    fn firma(&self) -> String {
+        format!(
+            "{:?}|{}|{}|{}|{}",
+            self.empleado, self.alta, self.baja, self.salario, self.irpf
+        )
+    }
+
+    fn modificado(&self) -> bool {
+        self.firma() != self.firma_inicial
     }
 }
 
@@ -287,24 +380,48 @@ struct ArticuloBuf {
     art: Articulo,
     precio: String,
     iva: String,
+    /// Huella de cómo estaba al abrirlo: detecta cambios sin guardar.
+    firma_inicial: String,
+}
+
+/// Huella del formulario de cliente. Incluye todos los campos que se editan
+/// en la ficha, no sólo la parte que se guarda en la factura.
+fn firma_cliente(cliente: &Cliente) -> String {
+    format!("{cliente:?}")
 }
 
 impl ArticuloBuf {
     fn desde(art: Articulo) -> Self {
-        Self {
+        let mut buf = Self {
             precio: fmt_cents(art.precio_cents),
             iva: fmt_pb(art.iva_pb),
             art,
-        }
+            firma_inicial: String::new(),
+        };
+        buf.firma_inicial = buf.firma();
+        buf
     }
 
     /// Artículo nuevo: el precio empieza vacío para que se vea la pista.
     fn nuevo(art: Articulo) -> Self {
-        Self {
+        let mut buf = Self {
             precio: String::new(),
             iva: fmt_pb(art.iva_pb),
             art,
-        }
+            firma_inicial: String::new(),
+        };
+        buf.firma_inicial = buf.firma();
+        buf
+    }
+
+    /// Incluye los textos tal como se teclean, no sólo los números ya
+    /// convertidos: un precio o un IVA a medias también cuenta.
+    fn firma(&self) -> String {
+        format!("{:?}|{}|{}", self.art, self.precio, self.iva)
+    }
+
+    fn modificado(&self) -> bool {
+        self.firma() != self.firma_inicial
     }
 }
 
@@ -472,6 +589,70 @@ fn abrir_url(url: &str) {
 #[cfg(not(windows))]
 fn abrir_url(url: &str) {
     let _ = std::process::Command::new("xdg-open").arg(url).spawn();
+}
+
+/// Tarjeta visible de la licencia: insignias CC/BY/SA, atribución y enlaces.
+fn bloque_licencia(ui: &mut egui::Ui) {
+    ui.separator();
+    ui.horizontal(|ui| {
+        ui.label(
+            RichText::new("Licencia")
+                .size(15.0)
+                .strong()
+                .color(tema::TEXTO),
+        );
+        tema::icono_ayuda(
+            ui,
+            "Licencia",
+            "El código y los contenidos propios se publican bajo CC BY-SA 4.0. Las dependencias de terceros conservan sus licencias.",
+        );
+    });
+    ui.add_space(6.0);
+    tema::tarjeta(ui, |ui| {
+        ui.horizontal(|ui| {
+            tema::insignias_licencia(ui, 30.0);
+            ui.add_space(4.0);
+            ui.vertical(|ui| {
+                ui.label(
+                    RichText::new(licencia::CORTA)
+                        .size(13.0)
+                        .strong()
+                        .color(tema::TEXTO),
+                );
+                ui.label(
+                    RichText::new(licencia::NOMBRE)
+                        .size(11.0)
+                        .color(tema::SUAVE),
+                );
+            });
+        });
+        ui.add_space(8.0);
+        ui.label(
+            RichText::new(licencia::ATRIBUCION)
+                .size(11.5)
+                .strong()
+                .color(tema::TEXTO),
+        );
+        ui.add_space(2.0);
+        ui.add(
+            egui::Label::new(RichText::new(licencia::RESUMEN).size(11.0).color(tema::SUAVE))
+                .wrap(),
+        );
+        ui.add_space(5.0);
+        ui.horizontal_wrapped(|ui| {
+            if ui.link("Resumen en español").clicked() {
+                abrir_url(licencia::URL_RESUMEN);
+            }
+            if ui.link("Texto legal").clicked() {
+                abrir_url(licencia::URL_TEXTO);
+            }
+        });
+        ui.label(
+            RichText::new(licencia::ALCANCE)
+                .size(10.0)
+                .color(tema::TENUE),
+        );
+    });
 }
 
 /// Texto y color del próximo plazo de una obligación, listo para pintar.
@@ -921,9 +1102,13 @@ pub struct App {
     pub seleccion: Option<u64>,
     editor: Option<Editor>,
     ficha_cliente: Option<Cliente>,
+    /// Huella de la ficha de cliente al abrirla, para detectar cambios.
+    ficha_cliente_inicial: Option<String>,
     ficha_empleado: Option<EmpleadoBuf>,
     ficha_articulo: Option<ArticuloBuf>,
     ficha_gasto: Option<GastoBuf>,
+    /// Cambio de ficha pendiente de confirmar por tener cambios sin guardar.
+    ficha_pendiente: Option<FichaDestino>,
     /// 0 = fichas de empleados, 1 = nóminas.
     pestana_empleados: u8,
     nomina_anyo: i32,
@@ -999,9 +1184,11 @@ impl App {
             seleccion: None,
             editor: None,
             ficha_cliente: None,
+            ficha_cliente_inicial: None,
             ficha_empleado: None,
             ficha_articulo: None,
             ficha_gasto: None,
+            ficha_pendiente: None,
             pestana_empleados: 0,
             nomina_anyo: Local::now().year(),
             nomina_mes: Local::now().month(),
@@ -1032,9 +1219,279 @@ impl App {
         self.toast_desde = Some(Instant::now());
     }
 
-    fn guardar(&mut self) {
-        if let Err(e) = self.db.guardar() {
-            self.avisar(format!("No se pudo guardar: {e}"), true);
+    /// Guarda el fichero y dice si se pudo. El error se avisa aquí; quien no
+    /// deba cerrar la app ni dar por bueno el cambio tiene que mirar el
+    /// resultado.
+    fn guardar(&mut self) -> bool {
+        match self.db.guardar() {
+            Ok(()) => true,
+            Err(e) => {
+                self.avisar(format!("No se pudo guardar: {e}"), true);
+                false
+            }
+        }
+    }
+
+    /// Abre una ficha de cliente y recuerda su estado inicial. Todas las
+    /// aperturas pasan por aquí para que el aviso de cambios sea fiable.
+    fn abrir_ficha_cliente(&mut self, cliente: Cliente) {
+        self.ficha_cliente_inicial = Some(firma_cliente(&cliente));
+        self.ficha_cliente = Some(cliente);
+    }
+
+    fn ficha_cliente_modificada(&self) -> bool {
+        match (&self.ficha_cliente, &self.ficha_cliente_inicial) {
+            (Some(cliente), Some(inicial)) => firma_cliente(cliente) != *inicial,
+            // Nunca se abre una ficha sin su huella; si ocurriera, es más
+            // seguro preguntar que descartar cambios en silencio.
+            (Some(_), None) => true,
+            _ => false,
+        }
+    }
+
+    /// Hay una decisión abierta que debe resolverse antes de tocar el fondo.
+    fn decision_pendiente(&self) -> bool {
+        self.ficha_pendiente.is_some()
+            || self.descartar.is_some()
+            || self.confirmar.is_some()
+            || self.cerrar_pendiente
+    }
+
+    fn ficha_modificada(&self, tipo: FichaTipo) -> bool {
+        match tipo {
+            FichaTipo::Cliente => self.ficha_cliente_modificada(),
+            FichaTipo::Empleado => self
+                .ficha_empleado
+                .as_ref()
+                .map(EmpleadoBuf::modificado)
+                .unwrap_or(false),
+            FichaTipo::Articulo => self
+                .ficha_articulo
+                .as_ref()
+                .map(ArticuloBuf::modificado)
+                .unwrap_or(false),
+        }
+    }
+
+    /// Fichas con cambios sin guardar. Puede haber más de una si se navegó
+    /// entre vistas sin resolverlas.
+    fn fichas_modificadas(&self) -> Vec<FichaTipo> {
+        [FichaTipo::Cliente, FichaTipo::Empleado, FichaTipo::Articulo]
+            .into_iter()
+            .filter(|tipo| self.ficha_modificada(*tipo))
+            .collect()
+    }
+
+    /// Hay trabajo sin guardar, en el documento o en alguna ficha.
+    fn hay_cambios_sin_guardar(&self) -> bool {
+        self.editor
+            .as_ref()
+            .map(|e| e.modificado())
+            .unwrap_or(false)
+            || !self.fichas_modificadas().is_empty()
+    }
+
+    /// Nombre legible de una ficha para el aviso de cierre.
+    fn etiqueta_ficha(&self, tipo: FichaTipo) -> String {
+        match tipo {
+            FichaTipo::Cliente => self
+                .ficha_cliente
+                .as_ref()
+                .map(|c| format!("el cliente «{}»", c.etiqueta()))
+                .unwrap_or_else(|| "el cliente".to_string()),
+            FichaTipo::Empleado => self
+                .ficha_empleado
+                .as_ref()
+                .map(|f| format!("el empleado «{}»", f.empleado.etiqueta()))
+                .unwrap_or_else(|| "el empleado".to_string()),
+            FichaTipo::Articulo => self
+                .ficha_articulo
+                .as_ref()
+                .map(|f| format!("el artículo «{}»", f.art.descripcion))
+                .unwrap_or_else(|| "el artículo".to_string()),
+        }
+    }
+
+    fn ficha_actual_id(&self, tipo: FichaTipo) -> Option<u64> {
+        match tipo {
+            FichaTipo::Cliente => self.ficha_cliente.as_ref().map(|c| c.id),
+            FichaTipo::Empleado => self.ficha_empleado.as_ref().map(|f| f.empleado.id),
+            FichaTipo::Articulo => self.ficha_articulo.as_ref().map(|f| f.art.id),
+        }
+    }
+
+    /// Guarda la ficha que se está editando. Devuelve `false` si no cumple las
+    /// mismas reglas que el botón Guardar; en ese caso no se cambia de ficha.
+    fn guardar_ficha(&mut self, tipo: FichaTipo) -> bool {
+        match tipo {
+            FichaTipo::Cliente => self.guardar_cliente_actual(),
+            FichaTipo::Empleado => self.guardar_empleado_actual(),
+            FichaTipo::Articulo => self.guardar_articulo_actual(),
+        }
+    }
+
+    fn guardar_cliente_actual(&mut self) -> bool {
+        let Some(mut c) = self.ficha_cliente.clone() else {
+            return false;
+        };
+        if c.nombre.trim().is_empty() {
+            self.avisar("El cliente necesita un nombre para poder guardarse.", true);
+            return false;
+        }
+        // Un NIF que empieza por dígito es DNI/NIE: persona física.
+        if c
+            .nif
+            .trim()
+            .chars()
+            .next()
+            .map(|x| x.is_ascii_digit())
+            .unwrap_or(false)
+        {
+            c.persona_fisica = true;
+        }
+        if matches!(
+            c.regimen,
+            RegimenCliente::Profesional | RegimenCliente::Minorista
+        ) {
+            c.persona_fisica = true;
+        }
+        if let Some(existente) = self.db.cliente_mut(c.id) {
+            *existente = c;
+        } else {
+            self.db.clientes.push(c);
+        }
+        if !self.guardar() {
+            return false;
+        }
+        self.avisar("Cliente guardado.", false);
+        self.ficha_cliente = None;
+        self.ficha_cliente_inicial = None;
+        true
+    }
+
+    fn guardar_empleado_actual(&mut self) -> bool {
+        let Some(f) = self.ficha_empleado.as_ref() else {
+            return false;
+        };
+        if f.empleado.nombre.trim().is_empty() {
+            self.avisar("El empleado necesita un nombre para poder guardarse.", true);
+            return false;
+        }
+        let Some(alta) = parse_fecha(&f.alta) else {
+            self.avisar("La fecha de alta no es válida: usa dd/mm/aaaa.", true);
+            return false;
+        };
+        let baja = if f.baja.trim().is_empty() {
+            None
+        } else {
+            match parse_fecha(&f.baja) {
+                Some(fecha) => Some(fecha),
+                None => {
+                    self.avisar("La fecha de baja no es válida: usa dd/mm/aaaa.", true);
+                    return false;
+                }
+            }
+        };
+        let Some(salario) = parse_cents(&f.salario) else {
+            self.avisar("El salario bruto anual no es válido.", true);
+            return false;
+        };
+        let Some(irpf) = parse_pb(&f.irpf) else {
+            self.avisar("El IRPF debe ser un número entre 0 y 100.", true);
+            return false;
+        };
+        if salario <= 0 {
+            self.avisar("El salario bruto anual debe ser mayor que cero.", true);
+            return false;
+        }
+        if let Some(baja) = baja {
+            if baja < alta {
+                self.avisar("La fecha de baja no puede ser anterior a la de alta.", true);
+                return false;
+            }
+        }
+        let mut e = f.empleado.clone();
+        e.fecha_alta = alta;
+        e.fecha_baja = baja;
+        e.salario_bruto_anual_cents = salario;
+        e.irpf_pb = irpf;
+        if let Some(existente) = self.db.empleado_mut(e.id) {
+            *existente = e;
+        } else {
+            self.db.empleados.push(e);
+        }
+        if !self.guardar() {
+            return false;
+        }
+        self.avisar("Empleado guardado.", false);
+        self.ficha_empleado = None;
+        true
+    }
+
+    fn guardar_articulo_actual(&mut self) -> bool {
+        let Some(f) = self.ficha_articulo.as_ref() else {
+            return false;
+        };
+        let (Some(precio), Some(iva)) = (parse_cents(&f.precio), parse_pb(&f.iva)) else {
+            self.avisar(
+                "Precio o IVA no válido: escribe números, por ejemplo 1.250,50",
+                true,
+            );
+            return false;
+        };
+        if f.art.descripcion.trim().is_empty() {
+            self.avisar("El artículo necesita una descripción.", true);
+            return false;
+        }
+        let mut a = f.art.clone();
+        a.precio_cents = precio;
+        a.iva_pb = iva;
+        if let Some(existente) = self.db.articulos.iter_mut().find(|x| x.id == a.id) {
+            *existente = a;
+        } else {
+            self.db.articulos.push(a);
+        }
+        if !self.guardar() {
+            return false;
+        }
+        self.avisar("Artículo guardado.", false);
+        self.ficha_articulo = None;
+        true
+    }
+
+    /// Si la ficha actual tiene cambios, guarda el destino y espera la
+    /// decisión del usuario. Si no, abre el destino directamente.
+    fn solicitar_ficha(&mut self, destino: FichaDestino) {
+        if self.ficha_pendiente.is_some() {
+            return;
+        }
+        if !destino.es_nuevo() && self.ficha_actual_id(destino.tipo()) == Some(destino.id()) {
+            return;
+        }
+        if self.ficha_modificada(destino.tipo()) {
+            self.ficha_pendiente = Some(destino);
+        } else {
+            self.aplicar_ficha(destino);
+        }
+    }
+
+    fn aplicar_ficha(&mut self, destino: FichaDestino) {
+        match destino {
+            FichaDestino::Cliente { cliente, .. } => self.abrir_ficha_cliente(cliente),
+            FichaDestino::Empleado { empleado, nuevo } => {
+                self.ficha_empleado = Some(if nuevo {
+                    EmpleadoBuf::nuevo(empleado)
+                } else {
+                    EmpleadoBuf::desde(empleado)
+                });
+            }
+            FichaDestino::Articulo { articulo, nuevo } => {
+                self.ficha_articulo = Some(if nuevo {
+                    ArticuloBuf::nuevo(articulo)
+                } else {
+                    ArticuloBuf::desde(articulo)
+                });
+            }
         }
     }
 
@@ -1382,17 +1839,38 @@ impl eframe::App for App {
 
         self.sincronizar_zoom(ctx);
 
-        // Cerrar la ventana con un documento a medias no debe perder cambios
-        // en silencio: se cancela el cierre y se ofrece guardar o descartar.
-        if ctx.input(|i| i.viewport().close_requested())
-            && self
-                .editor
-                .as_ref()
-                .map(|e| e.modificado())
-                .unwrap_or(false)
-        {
+        // Cerrar la ventana con un documento o una ficha a medias no debe
+        // perder cambios en silencio: se cancela el cierre y se ofrece
+        // guardar, descartar o seguir editando.
+        if ctx.input(|i| i.viewport().close_requested()) && self.hay_cambios_sin_guardar() {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-            self.cerrar_pendiente = true;
+            // No se apilan dos decisiones: si ya hay un aviso abierto, se
+            // resuelve primero y el usuario puede volver a cerrar después.
+            if !self.decision_pendiente() {
+                self.cerrar_pendiente = true;
+            }
+        }
+
+        // Mientras haya una decisión pendiente, el fondo queda bloqueado: el
+        // velo se lleva los clics y la rueda, y aquí se retira el foco y se
+        // descartan las entradas que podrían cambiar datos del fondo (texto,
+        // pegado/corte y teclas). Escape se conserva para cerrar el diálogo.
+        if self.decision_pendiente() {
+            velo_modal(ctx);
+            if let Some(id) = ctx.memory(|m| m.focused()) {
+                ctx.memory_mut(|m| m.surrender_focus(id));
+            }
+            ctx.input_mut(|i| {
+                i.events.retain(|e| match e {
+                    egui::Event::Text(_) | egui::Event::Paste(_) | egui::Event::Cut => false,
+                    egui::Event::Key {
+                        key: egui::Key::Escape,
+                        ..
+                    } => true,
+                    egui::Event::Key { .. } => false,
+                    _ => true,
+                });
+            });
         }
 
         // La barra lateral se adapta al ancho de la ventana y se puede
@@ -1421,6 +1899,19 @@ impl eframe::App for App {
                         .size(11.0)
                         .color(tema::TENUE),
                 );
+                if ui
+                    .link(
+                        RichText::new("Licencia CC BY-SA 4.0")
+                            .size(9.5)
+                            .color(tema::TENUE),
+                    )
+                    .on_hover_text(
+                        "El código y los contenidos propios están bajo CC BY-SA 4.0. Abre el resumen de la licencia.",
+                    )
+                    .clicked()
+                {
+                    abrir_url(licencia::URL);
+                }
 
                 // Zoom: además de Ctrl + rueda y Ctrl + / −, que ya trae
                 // egui, aquí hay botones para ratón sin rueda.
@@ -1558,13 +2049,20 @@ impl eframe::App for App {
                         .inner_margin(egui::Margin::symmetric(18.0, 10.0)),
                 )
                 .show(ctx, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(RichText::new(&msg).size(12.5).strong().color(color));
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui.small_button("Cerrar").clicked() {
-                                self.toast = None;
-                                self.toast_desde = None;
-                            }
+                    // El botón queda a la derecha y el texto usa el resto del
+                    // ancho: los avisos largos se envuelven en vez de cortarse.
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.small_button("Cerrar").clicked() {
+                            self.toast = None;
+                            self.toast_desde = None;
+                        }
+                        ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                            ui.add(
+                                egui::Label::new(
+                                    RichText::new(&msg).size(12.5).strong().color(color),
+                                )
+                                .wrap(),
+                            );
                         });
                     });
                 });
@@ -1669,6 +2167,9 @@ impl eframe::App for App {
         }
         if self.asistente.is_some() {
             self.ventana_asistente(ctx);
+        }
+        if self.ficha_pendiente.is_some() {
+            self.ventana_ficha_pendiente(ctx);
         }
         if self.descartar.is_some() {
             self.ventana_descartar(ctx);
@@ -2097,6 +2598,84 @@ impl App {
         }
     }
 
+    /// Aviso al cambiar de ficha con cambios sin guardar: guardar, descartar
+    /// o seguir editando. El destino se aplica sólo después de resolverlo.
+    fn ventana_ficha_pendiente(&mut self, ctx: &egui::Context) {
+        let Some(destino) = self.ficha_pendiente.clone() else {
+            return;
+        };
+        let tipo = destino.tipo();
+        let (titulo, mensaje) = match tipo {
+            FichaTipo::Cliente => (
+                "El cliente tiene cambios sin guardar.",
+                "Si abres otro cliente ahora se pierden. Puedes guardar esta ficha y continuar, descartar los cambios o seguir editando.",
+            ),
+            FichaTipo::Empleado => (
+                "El empleado tiene cambios sin guardar.",
+                "Si abres otro empleado ahora se pierden. Puedes guardar esta ficha y continuar, descartar los cambios o seguir editando.",
+            ),
+            FichaTipo::Articulo => (
+                "El artículo tiene cambios sin guardar.",
+                "Si abres otro artículo ahora se pierden. Puedes guardar esta ficha y continuar, descartar los cambios o seguir editando.",
+            ),
+        };
+        let mut guardar = false;
+        let mut descartar = false;
+        let mut seguir = false;
+        egui::Window::new("Cambios sin guardar")
+            .id(egui::Id::new("cambios_ficha"))
+            .collapsible(false)
+            .resizable(false)
+            .order(egui::Order::Foreground)
+            .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+            .default_width(480.0)
+            .frame(marco_dialogo(ctx))
+            .show(ctx, |ui| {
+                ui.set_min_width(430.0);
+                ui.set_max_width(460.0);
+                ui.add(
+                    egui::Label::new(RichText::new(titulo).strong().color(tema::TEXTO)).wrap(),
+                );
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(mensaje)
+                            .size(11.5)
+                            .color(tema::SUAVE),
+                    )
+                    .wrap(),
+                );
+                ui.add_space(12.0);
+                ui.horizontal_wrapped(|ui| {
+                    if tema::boton_primario(ui, "Guardar cambios y continuar").clicked() {
+                        guardar = true;
+                    }
+                    if ui.button("Descartar cambios").clicked() {
+                        descartar = true;
+                    }
+                    if ui.button("Seguir editando").clicked() {
+                        seguir = true;
+                    }
+                });
+            });
+        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            seguir = true;
+        }
+        // Una sola salida por frame y siempre la más segura: Escape o
+        // «Seguir editando» mandan sobre cualquier clic simultáneo.
+        if seguir {
+            self.ficha_pendiente = None;
+        } else if guardar {
+            if self.guardar_ficha(tipo) {
+                self.ficha_pendiente = None;
+                self.aplicar_ficha(destino.clone());
+            }
+        } else if descartar {
+            self.ficha_pendiente = None;
+            self.aplicar_ficha(destino);
+            self.avisar("Cambios descartados.", false);
+        }
+    }
+
     /// Aviso al salir con cambios sin guardar: guardar, descartar o seguir.
     fn ventana_descartar(&mut self, ctx: &egui::Context) {
         let Some(destino) = self.descartar else {
@@ -2112,22 +2691,30 @@ impl App {
             .order(egui::Order::Foreground)
             .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
             .default_width(460.0)
+            .frame(marco_dialogo(ctx))
             .show(ctx, |ui| {
-                ui.set_min_width(430.0);
-                ui.label(
-                    RichText::new("Este documento tiene cambios sin guardar.")
-                        .strong()
-                        .color(tema::TEXTO),
-                );
-                ui.label(
-                    RichText::new(
-                        "Si sales ahora se pierden. Puedes guardarlo como borrador y seguir donde lo dejaste.",
+                ui.set_min_width(420.0);
+                ui.set_max_width(440.0);
+                ui.add(
+                    egui::Label::new(
+                        RichText::new("Este documento tiene cambios sin guardar.")
+                            .strong()
+                            .color(tema::TEXTO),
                     )
-                    .size(11.5)
-                    .color(tema::SUAVE),
+                    .wrap(),
+                );
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(
+                            "Si sales ahora se pierden. Puedes guardarlo como borrador y seguir donde lo dejaste.",
+                        )
+                        .size(11.5)
+                        .color(tema::SUAVE),
+                    )
+                    .wrap(),
                 );
                 ui.add_space(12.0);
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     if tema::boton_primario(ui, "Guardar borrador y salir").clicked() {
                         guardar = true;
                     }
@@ -2142,21 +2729,19 @@ impl App {
         if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
             seguir = true;
         }
-        if guardar {
+        if seguir {
+            self.descartar = None;
+        } else if guardar {
             if self.guardar_borrador_actual() {
                 self.descartar = None;
                 self.vista = destino;
             }
-        }
-        if descartar {
+        } else if descartar {
             self.descartar = None;
             self.editor = None;
             self.seleccion = None;
             self.vista = destino;
             self.avisar("Cambios descartados.", false);
-        }
-        if seguir {
-            self.descartar = None;
         }
     }
 
@@ -2174,18 +2759,30 @@ impl App {
             .order(egui::Order::Foreground)
             .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
             .default_width(480.0)
+            .frame(marco_dialogo(ctx))
             .show(ctx, |ui| {
                 ui.set_min_width(430.0);
-                ui.label(
-                    RichText::new(&conf.titulo)
-                        .size(17.0)
-                        .strong()
-                        .color(tema::TEXTO),
+                ui.set_max_width(460.0);
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(&conf.titulo)
+                            .size(17.0)
+                            .strong()
+                            .color(tema::TEXTO),
+                    )
+                    .wrap(),
                 );
                 ui.add_space(4.0);
-                ui.label(RichText::new(&conf.mensaje).size(12.0).color(tema::SUAVE));
+                ui.add(
+                    egui::Label::new(
+                        RichText::new(&conf.mensaje)
+                            .size(12.0)
+                            .color(tema::SUAVE),
+                    )
+                    .wrap(),
+                );
                 ui.add_space(10.0);
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     if ui.button("Cancelar").clicked() {
                         cancelar = true;
                     }
@@ -2197,25 +2794,70 @@ impl App {
         if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
             cancelar = true;
         }
-        if aceptar {
+        // Cancelar o Escape gana si en el mismo frame llegan las dos señales:
+        // una acción destructiva no se ejecuta por un doble evento.
+        if cancelar {
+            self.confirmar = None;
+        } else if aceptar {
             self.confirmar = None;
             self.ejecutar_confirmacion(conf.accion);
-        } else if cancelar {
-            self.confirmar = None;
         }
     }
 
-    /// Cierre de la ventana con un documento sin guardar.
+    /// Cierre de la ventana con cambios sin guardar en el documento o en una
+    /// ficha de cliente, empleado o artículo.
     fn ventana_cerrar(&mut self, ctx: &egui::Context) {
-        if !self
+        let doc_modificado = self
             .editor
             .as_ref()
             .map(|e| e.modificado())
-            .unwrap_or(false)
-        {
+            .unwrap_or(false);
+        let fichas = self.fichas_modificadas();
+        if !doc_modificado && fichas.is_empty() {
             self.cerrar_pendiente = false;
             return;
         }
+
+        let mut pendientes: Vec<String> = Vec::new();
+        if doc_modificado {
+            pendientes.push("el documento".to_string());
+        }
+        pendientes.extend(fichas.iter().map(|t| self.etiqueta_ficha(*t)));
+        let lista = match pendientes.len() {
+            0 => String::new(),
+            1 => pendientes[0].clone(),
+            n => format!("{} y {}", pendientes[..n - 1].join(", "), pendientes[n - 1]),
+        };
+        let titulo = if fichas.is_empty() {
+            "El documento tiene cambios sin guardar."
+        } else if doc_modificado {
+            "Hay cambios sin guardar."
+        } else if fichas.len() == 1 {
+            "Hay cambios sin guardar en una ficha."
+        } else {
+            "Hay cambios sin guardar en varias fichas."
+        };
+        let detalle = if fichas.is_empty() {
+            "Si cierras ahora se pierden. Guarda el borrador para terminar la factura más tarde."
+                .to_string()
+        } else {
+            format!(
+                "Si cierras ahora se pierden. {}: {lista}.",
+                if pendientes.len() == 1 {
+                    "Pendiente"
+                } else {
+                    "Pendientes"
+                }
+            )
+        };
+        let guardar_etiqueta = if doc_modificado && fichas.is_empty() {
+            "Guardar borrador y cerrar"
+        } else if doc_modificado {
+            "Guardar todo y cerrar"
+        } else {
+            "Guardar cambios y cerrar"
+        };
+
         let mut guardar = false;
         let mut descartar = false;
         let mut seguir = false;
@@ -2226,23 +2868,20 @@ impl App {
             .order(egui::Order::Foreground)
             .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
             .default_width(460.0)
+            .frame(marco_dialogo(ctx))
             .show(ctx, |ui| {
                 ui.set_min_width(420.0);
-                ui.label(
-                    RichText::new("El documento tiene cambios sin guardar.")
-                        .strong()
-                        .color(tema::TEXTO),
+                ui.set_max_width(440.0);
+                ui.add(
+                    egui::Label::new(RichText::new(titulo).strong().color(tema::TEXTO)).wrap(),
                 );
-                ui.label(
-                    RichText::new(
-                        "Si cierras ahora se pierden. Guarda el borrador para terminar la factura más tarde.",
-                    )
-                    .size(11.5)
-                    .color(tema::SUAVE),
+                ui.add(
+                    egui::Label::new(RichText::new(detalle).size(11.5).color(tema::SUAVE))
+                        .wrap(),
                 );
                 ui.add_space(10.0);
-                ui.horizontal(|ui| {
-                    if tema::boton_primario(ui, "Guardar borrador y cerrar").clicked() {
+                ui.horizontal_wrapped(|ui| {
+                    if tema::boton_primario(ui, guardar_etiqueta).clicked() {
                         guardar = true;
                     }
                     if ui.button("Descartar y cerrar").clicked() {
@@ -2256,18 +2895,45 @@ impl App {
         if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
             seguir = true;
         }
-        if guardar && self.guardar_borrador_actual() {
-            self.cerrar_pendiente = false;
-            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-        }
-        if descartar {
-            self.editor = None;
-            self.seleccion = None;
-            self.cerrar_pendiente = false;
-            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-        }
         if seguir {
             self.cerrar_pendiente = false;
+            // Si lo pendiente es una ficha que no está a la vista, se lleva al
+            // usuario a ella para que pueda terminarla.
+            if !doc_modificado {
+                if let Some(tipo) = fichas.first() {
+                    self.vista = match *tipo {
+                        FichaTipo::Cliente => Vista::Clientes,
+                        FichaTipo::Empleado => Vista::Empleados,
+                        FichaTipo::Articulo => Vista::Articulos,
+                    };
+                }
+            }
+        } else if guardar {
+            let mut ok = true;
+            if doc_modificado && !self.guardar_borrador_actual() {
+                ok = false;
+            }
+            if ok {
+                for tipo in &fichas {
+                    if !self.guardar_ficha(*tipo) {
+                        ok = false;
+                        break;
+                    }
+                }
+            }
+            if ok {
+                self.cerrar_pendiente = false;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+        } else if descartar {
+            self.editor = None;
+            self.seleccion = None;
+            self.ficha_cliente = None;
+            self.ficha_cliente_inicial = None;
+            self.ficha_empleado = None;
+            self.ficha_articulo = None;
+            self.cerrar_pendiente = false;
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
     }
 
@@ -2297,8 +2963,9 @@ impl App {
                 {
                     self.ficha_empleado = None;
                 }
-                self.guardar();
-                self.avisar(format!("Empleado borrado: {nombre}."), false);
+                if self.guardar() {
+                    self.avisar(format!("Empleado borrado: {nombre}."), false);
+                }
             }
             AccionConfirmada::BorrarCliente(id) => {
                 if self.db.documentos.iter().any(|d| d.cliente_id == id) {
@@ -2320,9 +2987,11 @@ impl App {
                     .unwrap_or(false)
                 {
                     self.ficha_cliente = None;
+                    self.ficha_cliente_inicial = None;
                 }
-                self.guardar();
-                self.avisar(format!("Cliente borrado: {nombre}."), false);
+                if self.guardar() {
+                    self.avisar(format!("Cliente borrado: {nombre}."), false);
+                }
             }
             AccionConfirmada::BorrarArticulo(id) => {
                 let nombre = self
@@ -2341,8 +3010,9 @@ impl App {
                 {
                     self.ficha_articulo = None;
                 }
-                self.guardar();
-                self.avisar(format!("Artículo borrado: {nombre}."), false);
+                if self.guardar() {
+                    self.avisar(format!("Artículo borrado: {nombre}."), false);
+                }
             }
             AccionConfirmada::BorrarNomina(id) => match self.borrar_nomina(id) {
                 Ok(()) => self.avisar("Nómina borrada.", false),
@@ -2352,19 +3022,21 @@ impl App {
                 if !self.db.esta_cerrado(anyo) {
                     self.db.cerrados.push(anyo);
                     self.db.cerrados.sort_unstable();
-                    self.guardar();
-                    self.avisar(
-                        format!(
-                            "Ejercicio {anyo} cerrado: no se emitirán documentos con esa fecha."
-                        ),
-                        false,
-                    );
+                    if self.guardar() {
+                        self.avisar(
+                            format!(
+                                "Ejercicio {anyo} cerrado: no se emitirán documentos con esa fecha."
+                            ),
+                            false,
+                        );
+                    }
                 }
             }
             AccionConfirmada::QuitarAjustesModelo(clave) => {
                 self.db.ajustes_modelos.remove(&clave);
-                self.guardar();
-                self.avisar("Ajustes manuales del modelo eliminados.", false);
+                if self.guardar() {
+                    self.avisar("Ajustes manuales del modelo eliminados.", false);
+                }
             }
         }
     }
@@ -2388,13 +3060,28 @@ impl App {
         doc.irpf_pb = parse_pb(&editor.irpf).unwrap_or(0);
         doc.cliente_id = editor.cliente_id;
         doc.lineas = editor.lineas.iter().map(LineaBuf::a_linea).collect();
-        if let Some(d) = self.db.documento_mut(doc.id) {
+        let id = doc.id;
+        let anterior = self.db.documento(id).cloned();
+        if let Some(d) = self.db.documento_mut(id) {
             *d = doc;
         } else {
             self.db.documentos.push(doc);
         }
+        if !self.guardar() {
+            // No se escribió en disco: se deshace el cambio en memoria y el
+            // editor vuelve tal cual para reintentar sin perder el trabajo.
+            match anterior {
+                Some(previo) => {
+                    if let Some(d) = self.db.documento_mut(id) {
+                        *d = previo;
+                    }
+                }
+                None => self.db.documentos.retain(|d| d.id != id),
+            }
+            self.editor = Some(editor);
+            return false;
+        }
         self.seleccion = None;
-        self.guardar();
         self.avisar("Borrador guardado.", false);
         true
     }
@@ -4829,7 +5516,10 @@ impl App {
             if ui.button("+ Nuevo empleado").clicked() {
                 let mut e = Empleado::default();
                 e.id = self.db.id();
-                self.ficha_empleado = Some(EmpleadoBuf::nuevo(e));
+                self.solicitar_ficha(FichaDestino::Empleado {
+                    empleado: e,
+                    nuevo: true,
+                });
                 self.pestana_empleados = 0;
             }
         });
@@ -4899,16 +5589,16 @@ impl App {
                         }
                     }
                     if let Some(i) = abrir {
-                        self.ficha_empleado =
-                            Some(EmpleadoBuf::desde(self.db.empleados[i].clone()));
+                        self.solicitar_ficha(FichaDestino::Empleado {
+                            empleado: self.db.empleados[i].clone(),
+                            nuevo: false,
+                        });
                     }
                 });
 
-            let mut guardar_datos: Option<Empleado> = None;
+            let mut guardar_solicitado = false;
             let mut borrar_id: Option<u64> = None;
-            let mut error: Option<String> = None;
             if let Some(f) = self.ficha_empleado.as_mut() {
-                let mut guardar = false;
                 let mut borrar = false;
                 egui::ScrollArea::vertical()
                     .id_salt("ficha_empleado")
@@ -5085,56 +5775,19 @@ impl App {
                             && irpf_ok;
                         ui.horizontal(|ui| {
                             if ui.add_enabled(valido, egui::Button::new("Guardar")).clicked() {
-                                guardar = true;
+                                guardar_solicitado = true;
                             }
                             if ui.button("Borrar").clicked() {
                                 borrar = true;
                             }
                         });
                     });
-                if guardar {
-                    let alta = parse_fecha(&f.alta);
-                    let baja = if f.baja.trim().is_empty() {
-                        None
-                    } else {
-                        parse_fecha(&f.baja)
-                    };
-                    let salario = parse_cents(&f.salario);
-                    let irpf = parse_pb(&f.irpf);
-                    if let (Some(alta), Some(salario), Some(irpf)) = (alta, salario, irpf) {
-                        let baja_valida = f.baja.trim().is_empty()
-                            || baja.map(|b| b >= alta).unwrap_or(false);
-                        if salario > 0 && baja_valida {
-                            f.empleado.fecha_alta = alta;
-                            f.empleado.fecha_baja = baja;
-                            f.empleado.salario_bruto_anual_cents = salario;
-                            f.empleado.irpf_pb = irpf;
-                            guardar_datos = Some(f.empleado.clone());
-                        } else if salario <= 0 {
-                            error = Some("El salario bruto anual debe ser mayor que cero.".into());
-                        } else {
-                            error = Some("La fecha de baja no puede ser anterior a la de alta.".into());
-                        }
-                    } else {
-                        error = Some("Revisa las fechas y el salario: usa dd/mm/aaaa y un importe válido.".into());
-                    }
-                }
                 if borrar {
                     borrar_id = Some(f.empleado.id);
                 }
             }
-            if let Some(msg) = error {
-                self.avisar(msg, true);
-            }
-            if let Some(e) = guardar_datos {
-                if let Some(existente) = self.db.empleado_mut(e.id) {
-                    *existente = e;
-                } else {
-                    self.db.empleados.push(e);
-                }
-                self.guardar();
-                self.avisar("Empleado guardado.", false);
-                self.ficha_empleado = None;
+            if guardar_solicitado {
+                self.guardar_empleado_actual();
             }
             if let Some(id) = borrar_id {
                 if self.db.nominas.iter().any(|n| n.empleado_id == id) {
@@ -6348,7 +7001,10 @@ impl App {
             if ui.button("+ Nuevo cliente").clicked() {
                 let mut c = Cliente::default();
                 c.id = self.db.id();
-                self.ficha_cliente = Some(c);
+                self.solicitar_ficha(FichaDestino::Cliente {
+                    cliente: c,
+                    nuevo: true,
+                });
             }
         });
         ui.add_space(8.0);
@@ -6376,14 +7032,16 @@ impl App {
                         }
                     }
                     if let Some(i) = abrir {
-                        self.ficha_cliente = Some(self.db.clientes[i].clone());
+                        self.solicitar_ficha(FichaDestino::Cliente {
+                            cliente: self.db.clientes[i].clone(),
+                            nuevo: false,
+                        });
                     }
                 });
 
-            let mut guardar_datos: Option<Cliente> = None;
+            let mut guardar_solicitado = false;
             let mut borrar_id: Option<u64> = None;
             if let Some(f) = self.ficha_cliente.as_mut() {
-                let mut guardar = false;
                 let mut borrar = false;
                 egui::ScrollArea::vertical()
                     .id_salt("ficha_cliente")
@@ -6411,12 +7069,15 @@ impl App {
                                 );
                                 if !f.nif.trim().is_empty() && !nif_valido(&f.nif) {
                                     ui.label("");
-                                    ui.label(
-                                        RichText::new(
-                                            "Ese NIF no cuadra con su letra de control. Revísalo: una factura con NIF erróneo no vale como justificante del gasto del cliente.",
+                                    ui.add(
+                                        egui::Label::new(
+                                            RichText::new(
+                                                "Ese NIF no cuadra con su letra de control. Revísalo: una factura con NIF erróneo no vale como justificante del gasto del cliente.",
+                                            )
+                                            .size(10.5)
+                                            .color(tema::AMBAR),
                                         )
-                                        .size(10.5)
-                                        .color(tema::AMBAR),
+                                        .wrap(),
                                     );
                                     ui.end_row();
                                 }
@@ -6444,10 +7105,13 @@ impl App {
                                     });
                                 ui.end_row();
                                 ui.label("");
-                                ui.label(
-                                    RichText::new("En facturas: 21 % general, 15 % de retención si es profesional, 5,2 % de recargo si es minorista y 0 % con leyenda si es de la UE o ISP.")
-                                        .size(10.5)
-                                        .color(tema::TENUE),
+                                ui.add(
+                                    egui::Label::new(
+                                        RichText::new("En facturas: 21 % general, 15 % de retención si es profesional, 5,2 % de recargo si es minorista y 0 % con leyenda si es de la UE o ISP.")
+                                            .size(10.5)
+                                            .color(tema::TENUE),
+                                    )
+                                    .wrap(),
                                 );
                                 ui.end_row();
                                 if f.persona_fisica {
@@ -6515,47 +7179,19 @@ impl App {
                                 )
                                 .clicked()
                             {
-                                guardar = true;
+                                guardar_solicitado = true;
                             }
                             if ui.button("Borrar").clicked() {
                                 borrar = true;
                             }
                         });
                     });
-                if guardar {
-                    let mut c = f.clone();
-                    // Un NIF que empieza por dígito es DNI/NIE: persona física.
-                    if c
-                        .nif
-                        .trim()
-                        .chars()
-                        .next()
-                        .map(|x| x.is_ascii_digit())
-                        .unwrap_or(false)
-                    {
-                        c.persona_fisica = true;
-                    }
-                    if matches!(
-                        c.regimen,
-                        RegimenCliente::Profesional | RegimenCliente::Minorista
-                    ) {
-                        c.persona_fisica = true;
-                    }
-                    guardar_datos = Some(c);
-                }
                 if borrar {
                     borrar_id = Some(f.id);
                 }
             }
-            if let Some(c) = guardar_datos {
-                if let Some(existente) = self.db.cliente_mut(c.id) {
-                    *existente = c;
-                } else {
-                    self.db.clientes.push(c);
-                }
-                self.guardar();
-                self.avisar("Cliente guardado.", false);
-                self.ficha_cliente = None;
+            if guardar_solicitado {
+                self.guardar_cliente_actual();
             }
             if let Some(id) = borrar_id {
                 let usado = self.db.documentos.iter().any(|d| d.cliente_id == id);
@@ -6602,7 +7238,10 @@ impl App {
                     ..Default::default()
                 };
                 a.id = self.db.id();
-                self.ficha_articulo = Some(ArticuloBuf::nuevo(a));
+                self.solicitar_ficha(FichaDestino::Articulo {
+                    articulo: a,
+                    nuevo: true,
+                });
             }
         });
         ui.add_space(8.0);
@@ -6631,16 +7270,16 @@ impl App {
                         }
                     }
                     if let Some(i) = abrir {
-                        self.ficha_articulo =
-                            Some(ArticuloBuf::desde(self.db.articulos[i].clone()));
+                        self.solicitar_ficha(FichaDestino::Articulo {
+                            articulo: self.db.articulos[i].clone(),
+                            nuevo: false,
+                        });
                     }
                 });
 
-            let mut guardar_datos: Option<Articulo> = None;
+            let mut guardar_solicitado = false;
             let mut borrar_id: Option<u64> = None;
-            let mut error: Option<String> = None;
             if let Some(f) = self.ficha_articulo.as_mut() {
-                let mut guardar = false;
                 let mut borrar = false;
                 egui::ScrollArea::vertical()
                     .id_salt("ficha_articulo")
@@ -6695,44 +7334,19 @@ impl App {
                                 && parse_cents(&f.precio).is_some()
                                 && parse_pb(&f.iva).is_some();
                             if ui.add_enabled(valido, egui::Button::new("Guardar")).clicked() {
-                                guardar = true;
+                                guardar_solicitado = true;
                             }
                             if ui.button("Borrar").clicked() {
                                 borrar = true;
                             }
                         });
                     });
-                if guardar {
-                    match (parse_cents(&f.precio), parse_pb(&f.iva)) {
-                        (Some(p), Some(i)) => {
-                            f.art.precio_cents = p;
-                            f.art.iva_pb = i;
-                            guardar_datos = Some(f.art.clone());
-                        }
-                        _ => {
-                            error = Some(
-                                "Precio o IVA no válido: escribe números, por ejemplo 1.250,50"
-                                    .to_string(),
-                            );
-                        }
-                    }
-                }
                 if borrar {
                     borrar_id = Some(f.art.id);
                 }
             }
-            if let Some(msg) = error {
-                self.avisar(msg, true);
-            }
-            if let Some(a) = guardar_datos {
-                if let Some(existente) = self.db.articulos.iter_mut().find(|x| x.id == a.id) {
-                    *existente = a;
-                } else {
-                    self.db.articulos.push(a);
-                }
-                self.guardar();
-                self.avisar("Artículo guardado.", false);
-                self.ficha_articulo = None;
+            if guardar_solicitado {
+                self.guardar_articulo_actual();
             }
             if let Some(id) = borrar_id {
                 let nombre = self
@@ -6791,8 +7405,10 @@ impl App {
         self.editor = None;
         self.seleccion = None;
         self.ficha_cliente = None;
+        self.ficha_cliente_inicial = None;
         self.ficha_empleado = None;
         self.ficha_articulo = None;
+        self.ficha_pendiente = None;
         self.ficha_gasto = None;
         self.cobro = None;
         let mensaje = aviso.unwrap_or_else(|| {
@@ -8449,6 +9065,8 @@ impl App {
                 .small()
                 .color(egui::Color32::from_gray(110)),
             );
+            ui.add_space(16.0);
+            bloque_licencia(ui);
         });
     }
 
@@ -8864,4 +9482,39 @@ fn tarjeta(ui: &mut egui::Ui, titulo: &str, valor: &str) {
                 ui.label(RichText::new(valor).size(20.0).strong());
             });
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn la_ficha_de_empleado_detecta_cambios_en_texto_sin_guardar() {
+        let mut ficha = EmpleadoBuf::nuevo(Empleado::default());
+        assert!(!ficha.modificado());
+        ficha.salario = "24.000,00".to_string();
+        assert!(ficha.modificado());
+    }
+
+    #[test]
+    fn la_ficha_de_articulo_detecta_cambios_en_precio_e_iva() {
+        let articulo = Articulo {
+            descripcion: "Consulta".to_string(),
+            precio_cents: 5_000,
+            iva_pb: 2_100,
+            ..Default::default()
+        };
+        let mut ficha = ArticuloBuf::desde(articulo);
+        assert!(!ficha.modificado());
+        ficha.precio = "60,00".to_string();
+        assert!(ficha.modificado());
+    }
+
+    #[test]
+    fn la_ficha_de_cliente_detecta_cambios_en_campos_que_no_van_a_factura() {
+        let mut cliente = Cliente::default();
+        let inicial = firma_cliente(&cliente);
+        cliente.notas = "Llamar antes de visitar".to_string();
+        assert_ne!(firma_cliente(&cliente), inicial);
+    }
 }

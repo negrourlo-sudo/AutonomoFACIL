@@ -271,6 +271,102 @@ pub fn insignia_estado(ui: &mut egui::Ui, estado: Estado) {
     insignia(ui, estado.nombre(), fondo, color);
 }
 
+/// Insignias CC, BY y SA de la licencia, dibujadas con el mismo estilo que
+/// el resto de iconos de la app (sin imágenes ni dependencias extra).
+pub fn insignias_licencia(ui: &mut egui::Ui, lado: f32) {
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 3.0;
+        insignia_cc(ui, lado);
+        insignia_by(ui, lado);
+        insignia_sa(ui, lado);
+    });
+}
+
+fn insignia_cc(ui: &mut egui::Ui, lado: f32) {
+    marco_licencia(ui, lado, "CC", "Creative Commons", |p, rect| {
+        p.text(
+            rect.center(),
+            egui::Align2::CENTER_CENTER,
+            "CC",
+            egui::FontId::proportional(lado * 0.40),
+            TEXTO,
+        );
+    });
+}
+
+fn insignia_by(ui: &mut egui::Ui, lado: f32) {
+    marco_licencia(ui, lado, "BY", "Atribución", |p, rect| {
+        let c = rect.center();
+        let r = rect.width() / 2.0;
+        p.circle_filled(egui::pos2(c.x, c.y - r * 0.26), r * 0.17, TEXTO);
+        p.add(egui::Shape::convex_polygon(
+            vec![
+                egui::pos2(c.x - r * 0.30, c.y + r * 0.38),
+                egui::pos2(c.x - r * 0.16, c.y + r * 0.01),
+                egui::pos2(c.x + r * 0.16, c.y + r * 0.01),
+                egui::pos2(c.x + r * 0.30, c.y + r * 0.38),
+            ],
+            TEXTO,
+            Stroke::NONE,
+        ));
+    });
+}
+
+fn insignia_sa(ui: &mut egui::Ui, lado: f32) {
+    marco_licencia(ui, lado, "SA", "CompartirIgual", |p, rect| {
+        let c = rect.center();
+        let r = rect.width() * 0.25;
+        let (inicio, fin) = (0.55_f32, 5.35_f32);
+        let mut puntos = Vec::with_capacity(25);
+        for i in 0..=24 {
+            let angulo = inicio + (fin - inicio) * i as f32 / 24.0;
+            puntos.push(egui::pos2(
+                c.x + r * angulo.cos(),
+                c.y + r * angulo.sin(),
+            ));
+        }
+        p.add(egui::Shape::line(
+            puntos,
+            Stroke::new((rect.width() * 0.065).max(1.4), TEXTO),
+        ));
+        let direccion = egui::vec2(-fin.sin(), fin.cos());
+        let punta = egui::pos2(c.x + r * fin.cos(), c.y + r * fin.sin())
+            + direccion * (rect.width() * 0.08);
+        let base = punta - direccion * (rect.width() * 0.14);
+        let normal = egui::vec2(-direccion.y, direccion.x);
+        let ancho = rect.width() * 0.06;
+        p.add(egui::Shape::convex_polygon(
+            vec![punta, base + normal * ancho, base - normal * ancho],
+            TEXTO,
+            Stroke::NONE,
+        ));
+    });
+}
+
+fn marco_licencia(
+    ui: &mut egui::Ui,
+    lado: f32,
+    etiqueta: &'static str,
+    ayuda: &'static str,
+    dibujar: impl FnOnce(&egui::Painter, egui::Rect),
+) {
+    let (rect, respuesta) = ui.allocate_exact_size(egui::vec2(lado, lado), egui::Sense::hover());
+    {
+        let p = ui.painter();
+        p.circle_filled(rect.center(), lado / 2.0, SUPERFICIE);
+        p.circle_stroke(
+            rect.center(),
+            lado / 2.0,
+            Stroke::new((lado * 0.05).clamp(1.0, 2.0), TEXTO),
+        );
+        dibujar(p, rect);
+    }
+    respuesta.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::WidgetType::Label, ui.is_enabled(), etiqueta)
+    });
+    respuesta.on_hover_text(ayuda);
+}
+
 /// Botón de acción principal: relleno de acento y texto blanco.
 pub fn boton_primario(ui: &mut egui::Ui, texto: &str) -> Response {
     ui.add(
