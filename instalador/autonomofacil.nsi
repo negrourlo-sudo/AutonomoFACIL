@@ -32,11 +32,11 @@ Unicode true
 ; La versión llega desde `empaquetar-nsis.sh` (que la lee de src/version.rs).
 ; Si se compila a mano, aquí queda el valor por defecto.
 !ifndef APP_VERSION
-!define APP_VERSION "0.7.8.0"
+!define APP_VERSION "0.7.9.0"
 !endif
 ; Windows quiere cuatro números en la versión del fichero.
 !ifndef APP_VERSION4
-!define APP_VERSION4 "0.7.8.0"
+!define APP_VERSION4 "0.7.9.0"
 !endif
 !define APP_KEY     "AutonomoFacil"
 !define ORIGEN      "..\dist"

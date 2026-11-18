@@ -168,9 +168,10 @@ pub fn parse_pb(s: &str) -> Option<i32> {
     Some((v * 100.0).round() as i32)
 }
 
-/// `"1200"`, `"1.200,50"`, `"1200.5"` -> céntimos. Acepta separadores
-/// españoles e ingleses; si hay coma Y punto, la coma es decimal.
-pub fn parse_cents(s: &str) -> Option<i64> {
+/// Convierte un decimal escrito por una persona a la escala indicada.
+/// Acepta separadores españoles e ingleses; si hay coma Y punto, la coma es
+/// decimal.
+fn parse_decimal(s: &str, escala: f64) -> Option<i64> {
     let bruto = s.trim().replace(' ', "").replace('€', "");
     if bruto.is_empty() {
         return Some(0);
@@ -184,12 +185,18 @@ pub fn parse_cents(s: &str) -> Option<i64> {
     if !v.is_finite() {
         return None;
     }
-    Some((v * 100.0).round() as i64)
+    Some((v * escala).round() as i64)
 }
 
-/// `"1,5"` -> milésimas (1,5 -> 1.500).
+/// `"1200"`, `"1.200,50"`, `"1200.5"` -> céntimos.
+pub fn parse_cents(s: &str) -> Option<i64> {
+    parse_decimal(s, 100.0)
+}
+
+/// `"1,5"` -> milésimas (1,5 -> 1.500). Conserva hasta tres decimales:
+/// `"1,255"` -> 1.255, sin redondear antes a céntimos.
 pub fn parse_qty(s: &str) -> Option<i64> {
-    parse_cents(s).map(|c| c * 10)
+    parse_decimal(s, 1000.0)
 }
 
 // ---------------------------------------------------------------------------
@@ -1101,6 +1108,27 @@ mod tests {
         assert!(parse_pb("100,01").is_none());
         assert!(parse_pb("1000").is_none());
         assert!(parse_pb("-1").is_none());
+    }
+
+    #[test]
+    fn las_cantidades_de_tres_decimales_sobreviven_a_ida_y_vuelta() {
+        for (texto, milli) in [("1,255", 1_255), ("0,125", 125), ("1,999", 1_999)] {
+            assert_eq!(parse_qty(texto), Some(milli), "{texto}");
+            assert_eq!(fmt_qty(milli), texto);
+            assert_eq!(parse_qty(&fmt_qty(milli)), Some(milli), "{texto}");
+        }
+    }
+
+    #[test]
+    fn el_importe_de_la_linea_usa_los_tres_decimales() {
+        for (texto, bruto) in [("1,255", 1_255), ("0,125", 125), ("1,999", 1_999)] {
+            let linea = Linea {
+                cantidad_milli: parse_qty(texto).unwrap(),
+                precio_cents: 1000,
+                ..Default::default()
+            };
+            assert_eq!(Documento::calc_linea(&linea).bruto, bruto, "{texto}");
+        }
     }
 
     #[test]
